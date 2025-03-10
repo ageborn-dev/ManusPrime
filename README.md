@@ -40,7 +40,7 @@ ManusPrime consists of several key components:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ManusPrime.git
+git clone https://github.com/ageborn-dev/ManusPrime.git
 cd ManusPrime
 
 # Create a new virtual environment
