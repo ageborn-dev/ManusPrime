@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from pydantic import Field
 
 from app.agent.manus import Manus
+from app.config import config
 from app.logger import logger
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message
@@ -35,6 +36,10 @@ class ManusPrime(Manus):
     def __init__(self, **data):
         """Initialize the ManusPrime agent with monitoring."""
         super().__init__(**data)
+        
+        # Get budget limit from config if not provided
+        if not self.budget_limit and config.monitoring.budget_limit > 0:
+            self.budget_limit = config.monitoring.budget_limit
         
         # Set up resource monitoring
         if self.budget_limit:
