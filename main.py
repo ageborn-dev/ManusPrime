@@ -1,13 +1,12 @@
 # main.py for ManusPrime
 import asyncio
 
-# This will be implemented later
 from app.agent.manusprime import ManusPrime
 from app.logger import logger
 
 
 async def main():
-    # Create ManusPrime agent (will be implemented later)
+    # Create ManusPrime agent
     agent = ManusPrime()
     
     while True:
@@ -22,7 +21,14 @@ async def main():
                 continue
                 
             logger.info("Processing your request with ManusPrime...")
-            await agent.run(prompt)
+            result = await agent.run(prompt)
+            
+            # Show model usage statistics
+            if hasattr(agent.llm, "model_usage") and agent.llm.model_usage:
+                print("\nModel usage statistics:")
+                for model, count in agent.llm.model_usage.items():
+                    print(f"- {model}: {count} calls")
+                
         except KeyboardInterrupt:
             logger.warning("Goodbye!")
             break
