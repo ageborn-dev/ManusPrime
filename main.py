@@ -2,17 +2,22 @@
 import asyncio
 
 from app.agent.manusprime import ManusPrime
+from app.config import config
 from app.logger import logger
 from app.utils.monitor import resource_monitor
 
 
 async def main():
-    # Create ManusPrime agent with budget limit
-    agent = ManusPrime(budget_limit=0.5)  # 50 cent budget limit
+    # Create ManusPrime agent (budget limit will be loaded from config)
+    agent = ManusPrime()
+    
+    budget_str = f"${config.monitoring.budget_limit:.2f}" if config.monitoring.budget_limit > 0 else "unlimited"
     
     print("\n🚀 ManusPrime initialized with resource monitoring!")
-    print("📊 Budget limit set to $0.50")
-    print("💡 Type 'exit' or 'quit' to end the session\n")
+    print(f"📊 Budget limit set to {budget_str}")
+    print("💡 Type 'exit' or 'quit' to end the session")
+    print("📈 Type 'stats' to see usage statistics")
+    print()
     
     while True:
         try:
