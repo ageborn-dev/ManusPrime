@@ -1,22 +1,24 @@
 # Global LLM configuration
 [llm]
-model = "claude-3-5-sonnet"
+model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-..."
 max_tokens = 4096
-temperature = 0.0
+temperature = 0.7
+api_type = "openai"
 
-# [llm] #AZURE OPENAI:
-# api_type= 'azure'
-# model = "YOUR_MODEL_NAME" #"gpt-4o-mini"
-# base_url = "{YOUR_AZURE_ENDPOINT.rstrip('/')}/openai/deployments/{AZURE_DEPOLYMENT_ID}"
-# api_key = "AZURE API KEY"
-# max_tokens = 8096
-# temperature = 0.0
-# api_version="AZURE API VERSION" #"2024-08-01-preview"
-
-# Optional configuration for specific LLM models
-[llm.vision]
-model = "claude-3-5-sonnet"
+# OpenAI Models configuration
+[llm.openai]
+model = "gpt-4o-mini"  # Default model for OpenAI
 base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
+api_key = "sk-..."  # Set this in environment variable OPENAI_API_KEY for security
+max_tokens = 4096
+temperature = 0.7
+
+# DeepSeek Models configuration (OpenAI compatible)
+[llm.deepseek]
+model = "deepseek-chat"  # Default model for DeepSeek
+base_url = "https://api.deepseek.com/v1"  
+api_key = ""  # Set this in environment variable DEEPSEEK_API_KEY for security
+max_tokens = 4096
+temperature = 0.3
