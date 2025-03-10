@@ -1,6 +1,6 @@
 # Global LLM configuration
 [llm]
-model = "gpt-4o"
+model = "gpt-4o-mini"
 base_url = "https://api.openai.com/v1"
 api_key = "sk-..."
 max_tokens = 4096
@@ -21,4 +21,33 @@ model = "deepseek-chat"  # Default model for DeepSeek
 base_url = "https://api.deepseek.com/v1"  
 api_key = ""  # Set this in environment variable DEEPSEEK_API_KEY for security
 max_tokens = 4096
-temperature = 0.3
+temperature = 0.7
+
+# Resource monitoring and cost management configuration
+[monitoring]
+# Budget limit in dollars (set to 0 for no limit)
+budget_limit = 5.0
+
+# Whether to enable model switching when budget is exceeded
+enable_budget_alerts = true
+
+# Cost per 1k tokens for each model (prompt + completion)
+[monitoring.costs]
+"gpt-4o" = 0.015
+"gpt-4o-mini" = 0.005
+"deepseek-chat" = 0.003
+"deepseek-r1" = 0.007
+
+# Caching configuration
+[cache]
+# Enable or disable content caching
+enable = true
+
+# Time in seconds before cached content expires (default: 24 hours)
+expiration_time = 86400
+
+# Maximum number of items to store in cache
+max_cache_size = 100
+
+# Cache directory (relative to project root)
+cache_dir = "cache"
