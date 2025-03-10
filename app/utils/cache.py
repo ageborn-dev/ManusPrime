@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-from app.config import PROJECT_ROOT
+from app.config import PROJECT_ROOT, config
 from app.logger import logger
 
 
@@ -21,20 +21,36 @@ class ContentCache:
     def __init__(
         self,
         cache_dir: Optional[Union[str, Path]] = None,
-        expiration_time: int = 86400,  # Default: 24 hours in seconds
-        max_cache_size: int = 100,     # Maximum number of cache entries
+        expiration_time: Optional[int] = None,
+        max_cache_size: Optional[int] = None,
+        enabled: Optional[bool] = None
     ):
         """
         Initialize the content cache.
         
         Args:
-            cache_dir: Directory to store cache files (default: PROJECT_ROOT/cache)
-            expiration_time: Time in seconds before cache entries expire
-            max_cache_size: Maximum number of cache entries to keep
+            cache_dir: Directory to store cache files (default from config)
+            expiration_time: Time in seconds before cache entries expire (default from config)
+            max_cache_size: Maximum number of cache entries to keep (default from config)
+            enabled: Whether caching is enabled (default from config)
         """
-        self.cache_dir = Path(cache_dir) if cache_dir else PROJECT_ROOT / "cache"
-        self.expiration_time = expiration_time
-        self.max_cache_size = max_cache_size
+        # Load settings from config if not provided
+        cache_config = config.cache
+        
+        self.enabled = enabled if enabled is not None else cache_config.enable
+        
+        if not self.enabled:
+            logger.info("Content cache is disabled")
+            return
+            
+        # Use provided values or defaults from config
+        cache_dir_value = cache_dir or cache_config.cache_dir
+        self.cache_dir = Path(cache_dir_value) if not isinstance(cache_dir_value, Path) else cache_dir_value
+        if not self.cache_dir.is_absolute():
+            self.cache_dir = PROJECT_ROOT / self.cache_dir
+            
+        self.expiration_time = expiration_time or cache_config.expiration_time
+        self.max_cache_size = max_cache_size or cache_config.max_cache_size
         
         # Ensure cache directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -54,6 +70,9 @@ class ContentCache:
         Returns:
             Cached value or None if not found or expired
         """
+        if not self.enabled:
+            return None
+            
         # First check memory cache
         if key in self.memory_cache:
             cache_entry = self.memory_cache[key]
@@ -94,6 +113,9 @@ class ContentCache:
             key: Cache key
             value: Value to cache
         """
+        if not self.enabled:
+            return
+            
         # Create cache entry
         cache_entry = {
             "timestamp": time.time(),
@@ -121,6 +143,9 @@ class ContentCache:
         Args:
             key: Cache key to invalidate
         """
+        if not self.enabled:
+            return
+            
         # Remove from memory cache
         if key in self.memory_cache:
             del self.memory_cache[key]
@@ -135,6 +160,9 @@ class ContentCache:
     
     def clear(self) -> None:
         """Clear all cache entries."""
+        if not self.enabled:
+            return
+            
         # Clear memory cache
         self.memory_cache.clear()
         
@@ -183,22 +211,28 @@ class ContentCache:
 
 
 # Decorator for caching function results
-def cached(expiration_time: int = 86400, cache_instance: Optional[ContentCache] = None):
+def cached(expiration_time: Optional[int] = None, cache_instance: Optional[ContentCache] = None):
     """
     Decorator to cache function results.
     
     Args:
-        expiration_time: Cache expiration time in seconds
+        expiration_time: Cache expiration time in seconds (default from config)
         cache_instance: Optional specific cache instance to use
         
     Returns:
         Decorator function
     """
-    cache = cache_instance or ContentCache(expiration_time=expiration_time)
+    # Use provided expiration time or get from config
+    actual_expiration = expiration_time or config.cache.expiration_time
+    cache = cache_instance or ContentCache(expiration_time=actual_expiration)
     
     def decorator(func):
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
+            # Skip caching if disabled
+            if not cache.enabled:
+                return await func(*args, **kwargs)
+                
             # Create a cache key from function name and arguments
             key_parts = [func.__name__]
             
@@ -228,6 +262,10 @@ def cached(expiration_time: int = 86400, cache_instance: Optional[ContentCache] 
             
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
+            # Skip caching if disabled
+            if not cache.enabled:
+                return func(*args, **kwargs)
+                
             # Create a cache key from function name and arguments
             key_parts = [func.__name__]
             
