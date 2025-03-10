@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
 
+from app.config import config
 from app.logger import logger
 
 
@@ -78,13 +79,24 @@ class ResourceMonitor:
             self.current_task: Optional[str] = None
             self.task_usage: Dict[str, ResourceUsage] = {}
             
-            # Model cost estimates ($ per 1K tokens)
-            self.model_costs = {
-                "gpt-4o": 0.015,
-                "gpt-4o-mini": 0.005,
-                "deepseek-chat": 0.003,
-                "deepseek-r1": 0.007,
-            }
+            # Load model costs from config
+            self.model_costs = {}
+            monitoring_config = config.monitoring
+            
+            for model, cost in monitoring_config.costs.__root__.items():
+                self.model_costs[model] = cost
+                
+            # Set default values if no costs defined
+            if not self.model_costs:
+                self.model_costs = {
+                    "gpt-4o": 0.015,
+                    "gpt-4o-mini": 0.005,
+                    "deepseek-chat": 0.003,
+                    "deepseek-r1": 0.007,
+                }
+            
+            # Enable/disable budget alerts
+            self.enable_budget_alerts = monitoring_config.enable_budget_alerts
             
             # Budget alert listeners
             self.budget_listeners: Set[callable] = set()
@@ -92,7 +104,7 @@ class ResourceMonitor:
             # Execution timing
             self.timers: Dict[str, float] = {}
             
-            logger.info("Resource monitor initialized")
+            logger.info(f"Resource monitor initialized with model costs: {self.model_costs}")
             self._initialized = True
     
     def start_session(self, budget_limit: Optional[float] = None) -> None:
@@ -102,11 +114,19 @@ class ResourceMonitor:
         Args:
             budget_limit: Optional budget limit in dollars
         """
+        # Use provided budget limit or get from config
+        config_budget = config.monitoring.budget_limit
+        effective_budget = budget_limit or (config_budget if config_budget > 0 else None)
+        
         self.session_usage = ResourceUsage(
             start_time=time.time(),
-            budget_limit=budget_limit
+            budget_limit=effective_budget
         )
-        logger.info("Resource monitoring session started")
+        
+        if effective_budget:
+            logger.info(f"Resource monitoring session started with budget limit: ${effective_budget:.2f}")
+        else:
+            logger.info("Resource monitoring session started (no budget limit)")
     
     def start_task(self, task_name: str) -> None:
         """
@@ -117,7 +137,7 @@ class ResourceMonitor:
         """
         self.current_task = task_name
         self.task_usage[task_name] = ResourceUsage(start_time=time.time())
-        logger.info(f"Started monitoring task: {task_name}")
+        logger.debug(f"Started monitoring task: {task_name}")
     
     def end_task(self) -> Optional[ResourceUsage]:
         """
@@ -135,7 +155,7 @@ class ResourceMonitor:
         if task_data:
             execution_time = time.time() - task_data.start_time
             task_data.total_execution_time = execution_time
-            logger.info(f"Task {task_name} completed in {execution_time:.2f} seconds")
+            logger.debug(f"Task {task_name} completed in {execution_time:.2f} seconds")
             
         self.current_task = None
         return task_data
@@ -203,7 +223,8 @@ class ResourceMonitor:
             self.task_usage[self.current_task].estimated_cost += cost
         
         # Check if we've exceeded budget limit
-        if (self.session_usage.budget_limit is not None and 
+        if (self.enable_budget_alerts and 
+            self.session_usage.budget_limit is not None and 
             self.session_usage.estimated_cost > self.session_usage.budget_limit):
             self._trigger_budget_alert(
                 self.session_usage.estimated_cost, 
@@ -365,6 +386,9 @@ class ResourceMonitor:
             current_cost: Current estimated cost
             budget_limit: Budget limit that was exceeded
         """
+        if not self.enable_budget_alerts:
+            return
+            
         logger.warning(f"Budget alert: ${current_cost:.2f} exceeds limit of ${budget_limit:.2f}")
         
         for callback in self.budget_listeners:
