@@ -1,15 +1,19 @@
+# run_flow.py for ManusPrime
 import asyncio
 import time
 
-from app.agent.manus import Manus
+# These will be implemented later
+from app.agent.manusprime import ManusPrime
 from app.flow.base import FlowType
 from app.flow.flow_factory import FlowFactory
 from app.logger import logger
 
 
 async def run_flow():
+    # Initialize with our main ManusPrime agent and any specialized agents
     agents = {
-        "manus": Manus(),
+        "manusprime": ManusPrime(),
+        # We'll add specialized agents later
     }
 
     while True:
@@ -19,14 +23,17 @@ async def run_flow():
                 logger.info("Goodbye!")
                 break
 
+            # Create a flow using our agents
             flow = FlowFactory.create_flow(
                 flow_type=FlowType.PLANNING,
                 agents=agents,
             )
+            
             if prompt.strip().isspace():
                 logger.warning("Skipping empty prompt.")
                 continue
-            logger.warning("Processing your request...")
+                
+            logger.info("Processing your request with ManusPrime...")
 
             try:
                 start_time = time.time()
