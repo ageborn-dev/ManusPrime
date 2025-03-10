@@ -21,8 +21,7 @@ class LLMSettings(BaseModel):
     api_key: str = Field(..., description="API key")
     max_tokens: int = Field(4096, description="Maximum number of tokens per request")
     temperature: float = Field(1.0, description="Sampling temperature")
-    api_type: str = Field(..., description="AzureOpenai or Openai")
-    api_version: str = Field(..., description="Azure Openai version if AzureOpenai")
+    api_type: str = Field("openai", description="API type (always openai for our providers)")
 
 
 class AppConfig(BaseModel):
@@ -67,32 +66,40 @@ class Config:
 
     def _load_initial_config(self):
         raw_config = self._load_config()
+        
+        # Get global defaults from base llm section
         base_llm = raw_config.get("llm", {})
-        llm_overrides = {
-            k: v for k, v in raw_config.get("llm", {}).items() if isinstance(v, dict)
-        }
-
+        
+        # Extract nested configs vs simple key-values
+        llm_subconfigs = {}
+        default_settings = {}
+        
+        for key, value in base_llm.items():
+            if isinstance(value, dict):
+                # This is a nested config (like llm.openai, llm.deepseek)
+                llm_subconfigs[key] = value
+            else:
+                # This is a direct setting (like llm.model, llm.api_key)
+                default_settings[key] = value
+        
+        # Create default settings dictionary
         default_settings = {
-            "model": base_llm.get("model"),
-            "base_url": base_llm.get("base_url"),
-            "api_key": base_llm.get("api_key"),
-            "max_tokens": base_llm.get("max_tokens", 4096),
-            "temperature": base_llm.get("temperature", 1.0),
-            "api_type": base_llm.get("api_type", ""),
-            "api_version": base_llm.get("api_version", ""),
+            "model": default_settings.get("model", "gpt-4o-mini"),
+            "base_url": default_settings.get("base_url", "https://api.openai.com/v1"),
+            "api_key": default_settings.get("api_key", ""),
+            "max_tokens": default_settings.get("max_tokens", 4096),
+            "temperature": default_settings.get("temperature", 0.7),
+            "api_type": default_settings.get("api_type", "openai"),
         }
-
-        config_dict = {
-            "llm": {
-                "default": default_settings,
-                **{
-                    name: {**default_settings, **override_config}
-                    for name, override_config in llm_overrides.items()
-                },
-            }
-        }
-
-        self._config = AppConfig(**config_dict)
+        
+        # Setup default config
+        providers = {"default": default_settings}
+        
+        # Add nested configs (override with their specific settings)
+        for provider, provider_config in llm_subconfigs.items():
+            providers[provider] = {**default_settings, **provider_config}
+        
+        self._config = AppConfig(llm=providers)
 
     @property
     def llm(self) -> Dict[str, LLMSettings]:
