@@ -24,8 +24,31 @@ class LLMSettings(BaseModel):
     api_type: str = Field("openai", description="API type (always openai for our providers)")
 
 
+class CacheSettings(BaseModel):
+    enable: bool = Field(True, description="Enable or disable content caching")
+    expiration_time: int = Field(86400, description="Cache expiration time in seconds")
+    max_cache_size: int = Field(100, description="Maximum number of items in cache")
+    cache_dir: str = Field("cache", description="Cache directory")
+
+
+class ModelCosts(BaseModel):
+    """Model costs per 1K tokens."""
+    __root__: Dict[str, float] = Field(default_factory=dict)
+
+    def __getitem__(self, key):
+        return self.__root__.get(key, 0.001)  # Default to low cost if not found
+
+
+class MonitoringSettings(BaseModel):
+    budget_limit: float = Field(0.0, description="Budget limit in dollars (0 for no limit)")
+    enable_budget_alerts: bool = Field(True, description="Enable budget alerts")
+    costs: ModelCosts = Field(default_factory=ModelCosts)
+
+
 class AppConfig(BaseModel):
     llm: Dict[str, LLMSettings]
+    cache: CacheSettings = Field(default_factory=CacheSettings)
+    monitoring: MonitoringSettings = Field(default_factory=MonitoringSettings)
 
 
 class Config:
@@ -99,11 +122,42 @@ class Config:
         for provider, provider_config in llm_subconfigs.items():
             providers[provider] = {**default_settings, **provider_config}
         
-        self._config = AppConfig(llm=providers)
+        # Load cache settings
+        cache_config = raw_config.get("cache", {})
+        cache_settings = CacheSettings(
+            enable=cache_config.get("enable", True),
+            expiration_time=cache_config.get("expiration_time", 86400),
+            max_cache_size=cache_config.get("max_cache_size", 100),
+            cache_dir=cache_config.get("cache_dir", "cache")
+        )
+        
+        # Load monitoring settings
+        monitoring_config = raw_config.get("monitoring", {})
+        costs_dict = monitoring_config.get("costs", {})
+        
+        monitoring_settings = MonitoringSettings(
+            budget_limit=monitoring_config.get("budget_limit", 0.0),
+            enable_budget_alerts=monitoring_config.get("enable_budget_alerts", True),
+            costs=ModelCosts(__root__=costs_dict)
+        )
+        
+        self._config = AppConfig(
+            llm=providers,
+            cache=cache_settings,
+            monitoring=monitoring_settings
+        )
 
     @property
     def llm(self) -> Dict[str, LLMSettings]:
         return self._config.llm
+    
+    @property
+    def cache(self) -> CacheSettings:
+        return self._config.cache
+    
+    @property
+    def monitoring(self) -> MonitoringSettings:
+        return self._config.monitoring
 
 
 config = Config()
