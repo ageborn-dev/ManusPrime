@@ -8,11 +8,11 @@ setup(
     name="manusprime",
     version="0.1.0",
     author="ManusPrime Team",
-    author_email="your.email@example.com",
+    author_email="smartbytes@outlook.com.gr",
     description="A multi-model AI agent framework for intelligent task execution",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/ManusPrime",
+    url="https://github.com/ageborn-dev/ManusPrime",
     packages=find_packages(),
     install_requires=[
         "pydantic~=2.10.4",
