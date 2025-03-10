@@ -1,11 +1,15 @@
+# main.py for ManusPrime
 import asyncio
 
-from app.agent.manus import Manus
+# This will be implemented later
+from app.agent.manusprime import ManusPrime
 from app.logger import logger
 
 
 async def main():
-    agent = Manus()
+    # Create ManusPrime agent (will be implemented later)
+    agent = ManusPrime()
+    
     while True:
         try:
             prompt = input("Enter your prompt (or 'exit'/'quit' to quit): ")
@@ -16,7 +20,8 @@ async def main():
             if not prompt.strip():
                 logger.warning("Skipping empty prompt.")
                 continue
-            logger.warning("Processing your request...")
+                
+            logger.info("Processing your request with ManusPrime...")
             await agent.run(prompt)
         except KeyboardInterrupt:
             logger.warning("Goodbye!")
