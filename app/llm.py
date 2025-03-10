@@ -2,7 +2,6 @@ from typing import Dict, List, Literal, Optional, Union
 
 from openai import (
     APIError,
-    AsyncAzureOpenAI,
     AsyncOpenAI,
     AuthenticationError,
     OpenAIError,
@@ -11,7 +10,7 @@ from openai import (
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from app.config import LLMSettings, config
-from app.logger import logger  # Assuming a logger is set up in your app
+from app.logger import logger
 from app.schema import Message
 
 
@@ -32,24 +31,17 @@ class LLM:
     ):
         if not hasattr(self, "client"):  # Only initialize if not already initialized
             llm_config = llm_config or config.llm
-            llm_config = llm_config.get(config_name, llm_config["default"])
-            self.model = llm_config.model
-            self.max_tokens = llm_config.max_tokens
-            self.temperature = llm_config.temperature
-            self.api_type = llm_config.api_type
-            self.api_key = llm_config.api_key
-            self.api_version = llm_config.api_version
-            self.base_url = llm_config.base_url
-            if self.api_type == "azure":
-                self.client = AsyncAzureOpenAI(
-                    base_url=self.base_url,
-                    api_key=self.api_key,
-                    api_version=self.api_version,
-                )
-            else:
-                self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            provider_config = llm_config.get(config_name, llm_config["default"])
+            self.model = provider_config.model
+            self.max_tokens = provider_config.max_tokens
+            self.temperature = provider_config.temperature
+            self.api_key = provider_config.api_key
+            self.base_url = provider_config.base_url
             
-            # Add model usage tracking for multi-model support
+            # Initialize OpenAI client (works for both OpenAI and DeepSeek)
+            self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            
+            # Used for multi-model tracking
             self.model_usage = {}
 
     @staticmethod
@@ -90,7 +82,7 @@ class LLM:
         system_msgs: Optional[List[Union[dict, Message]]] = None,
         stream: bool = True,
         temperature: Optional[float] = None,
-        model: Optional[str] = None,  # Added model parameter for multi-model support
+        model: Optional[str] = None,
     ) -> str:
         """
         Send a prompt to the LLM and get the response.
@@ -100,7 +92,7 @@ class LLM:
             system_msgs: Optional system messages to prepend
             stream (bool): Whether to stream the response
             temperature (float): Sampling temperature for the response
-            model (str): Optional model name to use instead of the default
+            model (str): Optional model override (gpt-4o, gpt-4o-mini, deepseek-chat, deepseek-r1)
 
         Returns:
             str: The generated response
@@ -112,7 +104,7 @@ class LLM:
                 messages = system_msgs + self.format_messages(messages)
             else:
                 messages = self.format_messages(messages)
-            
+
             # Use specified model or default
             model_name = model or self.model
             
@@ -177,7 +169,7 @@ class LLM:
         tools: Optional[List[dict]] = None,
         tool_choice: Literal["none", "auto", "required"] = "auto",
         temperature: Optional[float] = None,
-        model: Optional[str] = None,  # Added model parameter for multi-model support
+        model: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -190,7 +182,7 @@ class LLM:
             tools: List of tools to use
             tool_choice: Tool choice strategy
             temperature: Sampling temperature for the response
-            model: Optional model name to use instead of the default
+            model: Optional model override (gpt-4o, gpt-4o-mini, deepseek-chat, deepseek-r1)
             **kwargs: Additional completion arguments
 
         Returns:
@@ -236,7 +228,6 @@ class LLM:
 
             # Check if response is valid
             if not response.choices or not response.choices[0].message:
-                print(response)
                 raise ValueError("Invalid or empty response from LLM")
 
             return response.choices[0].message
