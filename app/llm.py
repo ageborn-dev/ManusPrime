@@ -48,30 +48,13 @@ class LLM:
                 )
             else:
                 self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            
+            # Add model usage tracking for multi-model support
+            self.model_usage = {}
 
     @staticmethod
     def format_messages(messages: List[Union[dict, Message]]) -> List[dict]:
-        """
-        Format messages for LLM by converting them to OpenAI message format.
-
-        Args:
-            messages: List of messages that can be either dict or Message objects
-
-        Returns:
-            List[dict]: List of formatted messages in OpenAI format
-
-        Raises:
-            ValueError: If messages are invalid or missing required fields
-            TypeError: If unsupported message types are provided
-
-        Examples:
-            >>> msgs = [
-            ...     Message.system_message("You are a helpful assistant"),
-            ...     {"role": "user", "content": "Hello"},
-            ...     Message.user_message("How are you?")
-            ... ]
-            >>> formatted = LLM.format_messages(msgs)
-        """
+        """Format messages for LLM by converting them to OpenAI message format."""
         formatted_messages = []
 
         for message in messages:
@@ -107,6 +90,7 @@ class LLM:
         system_msgs: Optional[List[Union[dict, Message]]] = None,
         stream: bool = True,
         temperature: Optional[float] = None,
+        model: Optional[str] = None,  # Added model parameter for multi-model support
     ) -> str:
         """
         Send a prompt to the LLM and get the response.
@@ -116,14 +100,10 @@ class LLM:
             system_msgs: Optional system messages to prepend
             stream (bool): Whether to stream the response
             temperature (float): Sampling temperature for the response
+            model (str): Optional model name to use instead of the default
 
         Returns:
             str: The generated response
-
-        Raises:
-            ValueError: If messages are invalid or response is empty
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
         """
         try:
             # Format system and user messages
@@ -132,11 +112,19 @@ class LLM:
                 messages = system_msgs + self.format_messages(messages)
             else:
                 messages = self.format_messages(messages)
+            
+            # Use specified model or default
+            model_name = model or self.model
+            
+            # Track model usage
+            self.model_usage[model_name] = self.model_usage.get(model_name, 0) + 1
+            
+            logger.info(f"Using model: {model_name}")
 
             if not stream:
                 # Non-streaming request
                 response = await self.client.chat.completions.create(
-                    model=self.model,
+                    model=model_name,
                     messages=messages,
                     max_tokens=self.max_tokens,
                     temperature=temperature or self.temperature,
@@ -148,7 +136,7 @@ class LLM:
 
             # Streaming request
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=model_name,
                 messages=messages,
                 max_tokens=self.max_tokens,
                 temperature=temperature or self.temperature,
@@ -189,6 +177,7 @@ class LLM:
         tools: Optional[List[dict]] = None,
         tool_choice: Literal["none", "auto", "required"] = "auto",
         temperature: Optional[float] = None,
+        model: Optional[str] = None,  # Added model parameter for multi-model support
         **kwargs,
     ):
         """
@@ -201,15 +190,11 @@ class LLM:
             tools: List of tools to use
             tool_choice: Tool choice strategy
             temperature: Sampling temperature for the response
+            model: Optional model name to use instead of the default
             **kwargs: Additional completion arguments
 
         Returns:
             ChatCompletionMessage: The model's response
-
-        Raises:
-            ValueError: If tools, tool_choice, or messages are invalid
-            OpenAIError: If API call fails after retries
-            Exception: For unexpected errors
         """
         try:
             # Validate tool_choice
@@ -228,10 +213,18 @@ class LLM:
                 for tool in tools:
                     if not isinstance(tool, dict) or "type" not in tool:
                         raise ValueError("Each tool must be a dict with 'type' field")
+                        
+            # Use specified model or default
+            model_name = model or self.model
+            
+            # Track model usage
+            self.model_usage[model_name] = self.model_usage.get(model_name, 0) + 1
+            
+            logger.info(f"Using model: {model_name}")
 
             # Set up the completion request
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=model_name,
                 messages=messages,
                 temperature=temperature or self.temperature,
                 max_tokens=self.max_tokens,
