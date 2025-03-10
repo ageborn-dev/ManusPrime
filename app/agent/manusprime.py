@@ -1,3 +1,4 @@
+import asyncio
 from typing import Dict, List, Optional
 
 from pydantic import Field
@@ -174,4 +175,79 @@ class ManusPrime(Manus):
             logger.info("Identified coding task - using deepseek-chat")
             return "deepseek-chat"
             
-        elif any(word in combined_text for word in ["plan", "organize", "strategy
+        elif any(word in combined_text for word in ["plan", "organize", "strategy", "workflow", "complex"]):
+            # Use GPT-4o for complex reasoning or planning
+            logger.info("Identified complex reasoning/planning task - using gpt-4o")
+            return "gpt-4o"
+            
+        # Default to more efficient model for general tasks
+        logger.info("Using default efficient model gpt-4o-mini for general task")
+        return "gpt-4o-mini"
+    
+    async def _enhance_context_with_memory(self) -> None:
+        """
+        Enhance the conversation context with relevant memories.
+        
+        This method finds semantically relevant past information and adds it to 
+        the conversation context to improve the agent's responses.
+        """
+        if not self.memory_manager or not self.memory.messages:
+            return
+            
+        # Get the last user message to use as a query
+        user_messages = [msg for msg in self.memory.messages[-5:] if hasattr(msg, 'role') and msg.role == "user"]
+        if not user_messages:
+            return
+            
+        # Use the most recent user message as query
+        query = user_messages[-1].content
+        if not query:
+            return
+            
+        # Get relevant context from memory
+        relevant_context = await self.memory_manager.get_context(
+            query=query,
+            include_recent=False,  # We already have recent messages in the context
+            include_relevant=True,
+            relevant_count=3  # Retrieve 3 most relevant messages
+        )
+        
+        if not relevant_context:
+            return
+            
+        # Format the relevant context
+        context_message = "Here's some relevant information from previous interactions:\n\n"
+        for i, msg in enumerate(relevant_context):
+            role = getattr(msg, 'role', 'memory')
+            content = getattr(msg, 'content', '')
+            if content:
+                context_message += f"{i+1}. {role}: {content}\n\n"
+        
+        # Add to memory as a system message
+        system_msg = Message.system_message(context_message)
+        self.memory.messages = [system_msg] + self.memory.messages[-5:]  # Keep system message and last 5 messages
+        
+        logger.info(f"Enhanced context with {len(relevant_context)} relevant memories")
+    
+    def is_stuck(self) -> bool:
+        """Enhanced stuck detection with model switching."""
+        stuck = super().is_stuck()
+        
+        if stuck:
+            # If we're stuck, try using a more powerful model
+            logger.warning("Detected stuck state - will try more powerful model")
+            
+        return stuck
+    
+    def handle_stuck_state(self):
+        """Enhanced handling of stuck states with model switching."""
+        # Add the original stuck handling
+        super().handle_stuck_state()
+        
+        # Add note that we'll try a more powerful model
+        logger.info("Switching to more powerful model (gpt-4o) to get unstuck")
+        
+        # If we have semantic memory, add a prompt to use it
+        if self.memory_manager and self.use_semantic_memory:
+            memory_prompt = "Use your semantic memory to recall relevant information from earlier in our conversation that might help solve this problem."
+            self.next_step_prompt = f"{memory_prompt}\n{self.next_step_prompt}"
