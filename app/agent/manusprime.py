@@ -5,23 +5,22 @@ from pydantic import Field
 
 from app.agent.manus import Manus
 from app.logger import logger
-from app.memory.manager import MemoryManager
 from app.prompt.manus import NEXT_STEP_PROMPT, SYSTEM_PROMPT
 from app.schema import Message
+from app.utils.monitor import resource_monitor
 
 
 class ManusPrime(Manus):
     """
-    An enhanced version of Manus that uses multiple AI models and
-    an advanced memory system with vector storage.
+    An enhanced version of Manus that uses multiple AI models.
     
     This agent extends the standard Manus agent with the ability to select
-    different models based on the task type and complexity, and leverages
-    a semantic memory system for better context recall.
+    different models based on the task type and complexity, and integrates
+    resource monitoring and caching for better performance.
     """
 
     name: str = "ManusPrime"
-    description: str = "A multi-model agent with semantic memory that can solve various tasks"
+    description: str = "A multi-model agent that can solve various tasks efficiently"
 
     # Use the same prompts as Manus
     system_prompt: str = SYSTEM_PROMPT
@@ -30,28 +29,30 @@ class ManusPrime(Manus):
     # Track last few messages to analyze tasks
     message_history_size: int = Field(default=3)
     
-    # Enhanced memory system
-    memory_manager: Optional[MemoryManager] = Field(default=None)
-    use_semantic_memory: bool = Field(default=True)
+    # Budget controls
+    budget_limit: Optional[float] = Field(default=None)
     
     def __init__(self, **data):
-        """Initialize the ManusPrime agent with enhanced memory."""
+        """Initialize the ManusPrime agent with monitoring."""
         super().__init__(**data)
         
-        # Initialize memory manager if not provided
-        if not self.memory_manager:
-            self.memory_manager = MemoryManager(base_memory=self.memory)
-            logger.info("Initialized MemoryManager for ManusPrime agent")
+        # Set up resource monitoring
+        if self.budget_limit:
+            resource_monitor.start_session(budget_limit=self.budget_limit)
+            resource_monitor.add_budget_listener(self._handle_budget_exceeded)
+        else:
+            resource_monitor.start_session()
+            
+        logger.info("ManusPrime agent initialized with resource monitoring")
     
     async def think(self) -> bool:
         """Process current state and decide next action using the appropriate model."""
         try:
+            # Start task tracking
+            resource_monitor.start_task(f"think_step_{self.current_step}")
+            
             # Select the most appropriate model based on the task
             model = self._select_model_for_task()
-            
-            # If using semantic memory, enhance context with relevant memories
-            if self.use_semantic_memory and self.memory_manager:
-                await self._enhance_context_with_memory()
             
             if self.next_step_prompt:
                 user_msg = Message.user_message(self.next_step_prompt)
@@ -90,11 +91,7 @@ class ManusPrime(Manus):
                 if self.tool_calls
                 else Message.assistant_message(response.content)
             )
-            
-            # Add to regular memory and semantic memory
             self.memory.add_message(assistant_msg)
-            if self.memory_manager and self.use_semantic_memory:
-                await self.memory_manager.add_message(assistant_msg)
 
             # Process result same as parent class
             if self.tool_choices == "none":
@@ -123,37 +120,69 @@ class ManusPrime(Manus):
                 )
             )
             return False
+        finally:
+            # End task tracking
+            resource_monitor.end_task()
+    
+    async def act(self) -> str:
+        """Execute tool calls with monitoring."""
+        try:
+            # Start task tracking
+            resource_monitor.start_task(f"act_step_{self.current_step}")
+            
+            if not self.tool_calls:
+                if self.tool_choices == "required":
+                    raise ValueError("Tool calls required but none provided")
+                return self.messages[-1].content or "No content or commands to execute"
+
+            results = []
+            for command in self.tool_calls:
+                # Track specific tool execution
+                resource_monitor.start_task(f"tool_{command.function.name}")
+                
+                result = await self.execute_tool(command)
+                logger.info(
+                    f"🎯 Tool '{command.function.name}' completed with result: {result}"
+                )
+                
+                # Track tool usage
+                resource_monitor.track_tool_usage(command.function.name)
+                
+                # End tool tracking
+                resource_monitor.end_task()
+
+                # Add tool response to memory
+                tool_msg = Message.tool_message(
+                    content=result, tool_call_id=command.id, name=command.function.name
+                )
+                self.memory.add_message(tool_msg)
+                results.append(result)
+
+            return "\n\n".join(results)
+        finally:
+            # End task tracking
+            resource_monitor.end_task()
     
     async def run(self, request: Optional[str] = None) -> str:
-        """Execute the agent's main loop with enhanced memory."""
-        if request:
-            # Add request to regular memory
-            user_msg = Message.user_message(request)
-            self.memory.add_message(user_msg)
+        """Execute the agent's main loop with monitoring."""
+        # Start task tracking for entire run
+        resource_monitor.start_task("complete_run")
+        
+        try:
+            if request:
+                # Add request to memory
+                self.update_memory("user", request)
             
-            # Add to semantic memory if enabled
-            if self.memory_manager and self.use_semantic_memory:
-                await self.memory_manager.add_message(user_msg)
-        
-        # Continue with regular execution
-        return await super().run(request)
-    
-    def update_memory(
-        self,
-        role: str,
-        content: str,
-        **kwargs,
-    ) -> None:
-        """Override update_memory to also update semantic memory."""
-        # Update regular memory first
-        super().update_memory(role, content, **kwargs)
-        
-        # Also update semantic memory if enabled
-        if self.memory_manager and self.use_semantic_memory:
-            # Get the last message added to regular memory
-            if self.memory.messages:
-                last_message = self.memory.messages[-1]
-                asyncio.create_task(self.memory_manager.add_message(last_message))
+            return await super().run(request)
+        finally:
+            # End task tracking
+            resource_monitor.end_task()
+            
+            # Log resource usage summary
+            usage = resource_monitor.get_summary()
+            logger.info(f"Run completed. Token usage: {usage['tokens']['total']}, Cost: ${usage['cost']:.4f}")
+            if usage['models']:
+                logger.info(f"Models used: {usage['models']}")
     
     def _select_model_for_task(self) -> str:
         """
@@ -184,51 +213,6 @@ class ManusPrime(Manus):
         logger.info("Using default efficient model gpt-4o-mini for general task")
         return "gpt-4o-mini"
     
-    async def _enhance_context_with_memory(self) -> None:
-        """
-        Enhance the conversation context with relevant memories.
-        
-        This method finds semantically relevant past information and adds it to 
-        the conversation context to improve the agent's responses.
-        """
-        if not self.memory_manager or not self.memory.messages:
-            return
-            
-        # Get the last user message to use as a query
-        user_messages = [msg for msg in self.memory.messages[-5:] if hasattr(msg, 'role') and msg.role == "user"]
-        if not user_messages:
-            return
-            
-        # Use the most recent user message as query
-        query = user_messages[-1].content
-        if not query:
-            return
-            
-        # Get relevant context from memory
-        relevant_context = await self.memory_manager.get_context(
-            query=query,
-            include_recent=False,  # We already have recent messages in the context
-            include_relevant=True,
-            relevant_count=3  # Retrieve 3 most relevant messages
-        )
-        
-        if not relevant_context:
-            return
-            
-        # Format the relevant context
-        context_message = "Here's some relevant information from previous interactions:\n\n"
-        for i, msg in enumerate(relevant_context):
-            role = getattr(msg, 'role', 'memory')
-            content = getattr(msg, 'content', '')
-            if content:
-                context_message += f"{i+1}. {role}: {content}\n\n"
-        
-        # Add to memory as a system message
-        system_msg = Message.system_message(context_message)
-        self.memory.messages = [system_msg] + self.memory.messages[-5:]  # Keep system message and last 5 messages
-        
-        logger.info(f"Enhanced context with {len(relevant_context)} relevant memories")
-    
     def is_stuck(self) -> bool:
         """Enhanced stuck detection with model switching."""
         stuck = super().is_stuck()
@@ -246,8 +230,20 @@ class ManusPrime(Manus):
         
         # Add note that we'll try a more powerful model
         logger.info("Switching to more powerful model (gpt-4o) to get unstuck")
+    
+    async def _handle_budget_exceeded(self, current_cost: float, budget_limit: float):
+        """
+        Handle budget limit exceeded event.
         
-        # If we have semantic memory, add a prompt to use it
-        if self.memory_manager and self.use_semantic_memory:
-            memory_prompt = "Use your semantic memory to recall relevant information from earlier in our conversation that might help solve this problem."
-            self.next_step_prompt = f"{memory_prompt}\n{self.next_step_prompt}"
+        Args:
+            current_cost: Current estimated cost
+            budget_limit: Budget limit that was exceeded
+        """
+        warning_message = f"⚠️ Budget alert: ${current_cost:.4f} exceeds limit of ${budget_limit:.4f}"
+        logger.warning(warning_message)
+        
+        # Add a message to the agent's memory
+        self.update_memory("system", f"{warning_message} Switching to more cost-effective models.")
+        
+        # Force use of the most cost-effective model
+        logger.info("Switching to most cost-effective model (gpt-4o-mini)")
