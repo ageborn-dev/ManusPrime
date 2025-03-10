@@ -1,26 +1,29 @@
+# setup.py for ManusPrime
 from setuptools import find_packages, setup
-
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="openmanus",
+    name="manusprime",
     version="0.1.0",
-    author="mannaandpoem and OpenManus Team",
-    author_email="mannaandpoem@gmail.com",
-    description="A versatile agent that can solve various tasks using multiple tools",
+    author="ManusPrime Team",
+    author_email="your.email@example.com",
+    description="A multi-model AI agent framework for intelligent task execution",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/mannaandpoem/OpenManus",
+    url="https://github.com/yourusername/ManusPrime",
     packages=find_packages(),
     install_requires=[
         "pydantic~=2.10.4",
         "openai~=1.58.1",
+        "anthropic~=0.5.0",
         "tenacity~=9.0.0",
         "pyyaml~=6.0.2",
         "loguru~=0.7.3",
         "numpy",
+        "faiss-cpu~=1.7.4",
+        "chromadb~=0.4.18",
         "datasets~=3.2.0",
         "html2text~=2024.2.26",
         "gymnasium~=1.0.0",
@@ -43,7 +46,7 @@ setup(
     python_requires=">=3.12",
     entry_points={
         "console_scripts": [
-            "openmanus=main:main",
+            "manusprime=main:main",
         ],
     },
 )
