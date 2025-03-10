@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 from app.config import LLMSettings, config
 from app.logger import logger
 from app.schema import Message
+from app.utils.monitor import resource_monitor
 
 
 class LLM:
@@ -38,7 +39,7 @@ class LLM:
             self.api_key = provider_config.api_key
             self.base_url = provider_config.base_url
             
-            # Initialize OpenAI client (works for both OpenAI and DeepSeek)
+            # Initialize OpenAI client
             self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
             
             # Used for multi-model tracking
@@ -98,6 +99,9 @@ class LLM:
             str: The generated response
         """
         try:
+            # Start timer for API call
+            resource_monitor.start_timer("llm_call")
+            
             # Format system and user messages
             if system_msgs:
                 system_msgs = self.format_messages(system_msgs)
@@ -122,6 +126,20 @@ class LLM:
                     temperature=temperature or self.temperature,
                     stream=False,
                 )
+                
+                # Track API usage
+                resource_monitor.track_api_call(
+                    model=model_name,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    success=True
+                )
+                
+                # End timer
+                elapsed = resource_monitor.end_timer("llm_call")
+                if elapsed:
+                    logger.debug(f"LLM call completed in {elapsed:.2f} seconds")
+                
                 if not response.choices or not response.choices[0].message.content:
                     raise ValueError("Empty or invalid response from LLM")
                 return response.choices[0].message.content
@@ -134,27 +152,58 @@ class LLM:
                 temperature=temperature or self.temperature,
                 stream=True,
             )
-
+            
+            # For streaming, we need to estimate token counts
+            # A simple approximation: count tokens based on whitespace-split
+            prompt_tokens = sum(len(m.get("content", "").split()) for m in messages if m.get("content"))
+            
             collected_messages = []
+            completion_tokens = 0
             async for chunk in response:
                 chunk_message = chunk.choices[0].delta.content or ""
                 collected_messages.append(chunk_message)
+                # Count completion tokens as we receive chunks
+                completion_tokens += len(chunk_message.split())
                 print(chunk_message, end="", flush=True)
 
             print()  # Newline after streaming
             full_response = "".join(collected_messages).strip()
+            
+            # Track API usage for streaming request
+            resource_monitor.track_api_call(
+                model=model_name,
+                # Use approximated token counts
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                success=True
+            )
+            
+            # End timer
+            elapsed = resource_monitor.end_timer("llm_call")
+            if elapsed:
+                logger.debug(f"LLM streaming call completed in {elapsed:.2f} seconds")
+            
             if not full_response:
                 raise ValueError("Empty response from streaming LLM")
             return full_response
 
         except ValueError as ve:
             logger.error(f"Validation error: {ve}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
         except OpenAIError as oe:
             logger.error(f"OpenAI API error: {oe}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
         except Exception as e:
             logger.error(f"Unexpected error in ask: {e}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
 
     @retry(
@@ -189,6 +238,9 @@ class LLM:
             ChatCompletionMessage: The model's response
         """
         try:
+            # Start timer for API call
+            resource_monitor.start_timer("llm_tool_call")
+            
             # Validate tool_choice
             if tool_choice not in ["none", "auto", "required"]:
                 raise ValueError(f"Invalid tool_choice: {tool_choice}")
@@ -225,15 +277,43 @@ class LLM:
                 timeout=timeout,
                 **kwargs,
             )
+            
+            # Track API usage
+            if hasattr(response, 'usage'):
+                resource_monitor.track_api_call(
+                    model=model_name,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    completion_tokens=response.usage.completion_tokens,
+                    success=True
+                )
+            else:
+                # Estimate token usage if not provided
+                prompt_tokens = sum(len(m.get("content", "").split()) for m in messages if m.get("content"))
+                completion_tokens = len(response.choices[0].message.content.split()) if response.choices[0].message.content else 0
+                resource_monitor.track_api_call(
+                    model=model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    success=True
+                )
+            
+            # End timer
+            elapsed = resource_monitor.end_timer("llm_tool_call")
+            if elapsed:
+                logger.debug(f"LLM tool call completed in {elapsed:.2f} seconds")
 
             # Check if response is valid
             if not response.choices or not response.choices[0].message:
+                print(response)
                 raise ValueError("Invalid or empty response from LLM")
 
             return response.choices[0].message
 
         except ValueError as ve:
             logger.error(f"Validation error in ask_tool: {ve}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_tool_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
         except OpenAIError as oe:
             if isinstance(oe, AuthenticationError):
@@ -242,7 +322,13 @@ class LLM:
                 logger.error("Rate limit exceeded. Consider increasing retry attempts.")
             elif isinstance(oe, APIError):
                 logger.error(f"API error: {oe}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_tool_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
         except Exception as e:
             logger.error(f"Unexpected error in ask_tool: {e}")
+            # End timer and track error
+            resource_monitor.end_timer("llm_tool_call")
+            resource_monitor.track_api_call(model=model or self.model, success=False)
             raise
