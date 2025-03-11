@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
@@ -98,16 +98,19 @@ async def create_task(prompt: str = Body(..., embed=True)):
     asyncio.create_task(run_task(task.id, prompt))
     return {"task_id": task.id}
 
+# Import both Manus and ManusPrime to maintain compatibility
 from app.agent.manus import Manus
-
+from app.agent.manusprime import ManusPrime
+from app.utils.monitor import resource_monitor
 
 async def run_task(task_id: str, prompt: str):
     try:
         task_manager.tasks[task_id].status = "running"
 
-        agent = Manus(
-            name="Manus",
-            description="A versatile agent that can solve various tasks using multiple tools",
+        # Use ManusPrime instead of Manus for multi-model capabilities
+        agent = ManusPrime(
+            name="ManusPrime",
+            description="A versatile multi-model agent that can solve various tasks efficiently",
             max_steps=30
         )
 
@@ -132,13 +135,13 @@ async def run_task(task_id: str, prompt: str):
             async def __call__(self, message):
                 import re
 
-                # 提取 - 后面的内容
+                # Extract content after - 
                 cleaned_message = re.sub(r'^.*? - ', '', message)
 
                 event_type = "log"
-                if "✨ Manus's thoughts:" in cleaned_message:
+                if "✨ Manus's thoughts:" in cleaned_message or "✨ ManusPrime's thoughts:" in cleaned_message:
                     event_type = "think"
-                elif "🛠️ Manus selected" in cleaned_message:
+                elif "🛠️ Manus selected" in cleaned_message or "🛠️ ManusPrime selected" in cleaned_message:
                     event_type = "tool"
                 elif "🎯 Tool" in cleaned_message:
                     event_type = "act"
@@ -146,16 +149,53 @@ async def run_task(task_id: str, prompt: str):
                     event_type = "error"
                 elif "🏁 Special tool" in cleaned_message:
                     event_type = "complete"
+                elif "Using model:" in cleaned_message or "Identified" in cleaned_message:
+                    event_type = "model"  # New event type for model selection
+                elif "Budget alert:" in cleaned_message:
+                    event_type = "budget"  # New event type for budget alerts
 
                 await task_manager.update_task_step(self.task_id, 0, cleaned_message, event_type)
 
         sse_handler = SSELogHandler(task_id)
         logger.add(sse_handler)
 
+        # Start resource monitoring for this task
+        resource_monitor.start_task(f"task_{task_id}")
+
         result = await agent.run(prompt)
+
+        # Add model usage information
+        if hasattr(agent.llm, "model_usage") and agent.llm.model_usage:
+            model_usage_info = ", ".join([f"{model}: {count}" for model, count in agent.llm.model_usage.items()])
+            await task_manager.update_task_step(
+                task_id, 0, 
+                f"Models used: {model_usage_info}", 
+                "info"
+            )
+
+        # Add resource usage information
+        usage = resource_monitor.get_task_summary(f"task_{task_id}")
+        if usage:
+            cost_info = f"Request cost: ${usage.get('cost', 0):.4f}, Tokens used: {usage.get('tokens', {}).get('total', 0)}"
+            await task_manager.update_task_step(
+                task_id, 0, 
+                cost_info, 
+                "resource"
+            )
+
+        # End resource monitoring for this task
+        resource_monitor.end_task()
+
         await task_manager.update_task_step(task_id, 1, result, "result")
         await task_manager.complete_task(task_id)
+
     except Exception as e:
+        # Log the exception
+        logger.error(f"Error in run_task: {str(e)}")
+        # End resource monitoring if needed
+        if resource_monitor.current_task and resource_monitor.current_task.startswith(f"task_{task_id}"):
+            resource_monitor.end_task()
+        # Notify the client
         await task_manager.fail_task(task_id, str(e))
 
 @app.get("/tasks/{task_id}/events")
@@ -197,7 +237,8 @@ async def task_events(task_id: str):
                             'steps': task.steps
                         })}\n\n"
                     yield f"event: {event['type']}\ndata: {formatted_event}\n\n"
-                elif event["type"] in ["think", "tool", "act", "run"]:
+                elif event["type"] in ["think", "tool", "act", "run", "model", "info", "budget", "resource"]:
+                    # Support for additional event types
                     yield f"event: {event['type']}\ndata: {formatted_event}\n\n"
                 else:
                     yield f"event: {event['type']}\ndata: {formatted_event}\n\n"
