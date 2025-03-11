@@ -353,8 +353,8 @@ function updateTaskStatus(task) {
 
     if (task.status === 'completed') {
         statusBar.innerHTML = `<span class="status-complete">✅ Task completed</span>`;
-    } else if (task.status === 'failed') {
-        statusBar.innerHTML = `<span class="status-error">❌ Task failed: ${task.error || 'Unknown error'}</span>`;
+    } else if (task.status.includes('failed')) {
+        statusBar.innerHTML = `<span class="status-error">❌ Task failed: ${task.status.replace('failed: ', '') || 'Unknown error'}</span>`;
     } else {
         statusBar.innerHTML = `<span class="status-running">⚙️ Task running: ${task.status}</span>`;
     }
