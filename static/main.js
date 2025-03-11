@@ -1,11 +1,13 @@
 let currentEventSource = null;
+let modelUsage = {};
+let resourceStats = {};
 
 function createTask() {
     const promptInput = document.getElementById('prompt-input');
     const prompt = promptInput.value.trim();
 
     if (!prompt) {
-        alert("Please enter a valid prompt");
+        showToast("Please enter a valid prompt", "error");
         promptInput.focus();
         return;
     }
@@ -14,6 +16,10 @@ function createTask() {
         currentEventSource.close();
         currentEventSource = null;
     }
+
+    // Reset model usage tracking
+    modelUsage = {};
+    resourceStats = {};
 
     const container = document.getElementById('task-container');
     container.innerHTML = '<div class="loading">Initializing task...</div>';
@@ -38,10 +44,12 @@ function createTask() {
         }
         setupSSE(data.task_id);
         loadHistory();
+        promptInput.value = '';
     })
     .catch(error => {
         container.innerHTML = `<div class="error">Error: ${error.message}</div>`;
         console.error('Failed to create task:', error);
+        showToast("Task creation failed", "error");
     });
 }
 
@@ -57,7 +65,16 @@ function setupSSE(taskId) {
         const container = document.getElementById('task-container');
 
         let heartbeatTimer = setInterval(() => {
-            container.innerHTML += '<div class="ping">·</div>';
+            const pingDiv = document.createElement('div');
+            pingDiv.className = 'ping';
+            pingDiv.innerHTML = '·';
+            container.appendChild(pingDiv);
+            
+            // Auto-scroll
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior: 'smooth'
+            });
         }, 5000);
 
         const pollInterval = setInterval(() => {
@@ -71,368 +88,195 @@ function setupSSE(taskId) {
                 });
         }, 10000);
 
-    if (!eventSource._listenersAdded) {
-        eventSource._listenersAdded = true;
-
-        let lastResultContent = '';
-        eventSource.addEventListener('status', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-                container.classList.add('active');
-                const welcomeMessage = document.querySelector('.welcome-message');
-                if (welcomeMessage) {
-                    welcomeMessage.style.display = 'none';
-                }
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                // Save result content
-                if (data.steps && data.steps.length > 0) {
-                    // Iterate through all steps, find the last result type
-                    for (let i = data.steps.length - 1; i >= 0; i--) {
-                        if (data.steps[i].type === 'result') {
-                            lastResultContent = data.steps[i].result;
-                            break;
-                        }
-                    }
-                }
-
-                // Parse and display each step with proper formatting
-                stepContainer.innerHTML = data.steps.map(step => {
-                    const content = step.result;
-                    const timestamp = new Date().toLocaleTimeString();
-                    return `
-                        <div class="step-item ${step.type || 'step'}">
-                            <div class="log-line">
-                                <span class="log-prefix">${getEventIcon(step.type)} [${timestamp}] ${getEventLabel(step.type)}:</span>
-                                <pre>${content}</pre>
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-
-                // Auto-scroll to bottom
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-            } catch (e) {
-                console.error('Status update failed:', e);
-            }
-        });
-
-        // Add handler for think event
-        eventSource.addEventListener('think', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                const step = document.createElement('div');
-                step.className = 'step-item think';
-                step.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-prefix">${getEventIcon('think')} [${timestamp}] ${getEventLabel('think')}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                stepContainer.appendChild(step);
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-
-                // Update task status
-                fetch(`/tasks/${taskId}`)
-                    .then(response => response.json())
-                    .then(task => {
-                        updateTaskStatus(task);
-                    })
-                    .catch(error => {
-                        console.error('Status update failed:', error);
-                    });
-            } catch (e) {
-                console.error('Think event handling failed:', e);
-            }
-        });
-
-        // Add handler for tool event
-        eventSource.addEventListener('tool', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                const step = document.createElement('div');
-                step.className = 'step-item tool';
-                step.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-prefix">${getEventIcon('tool')} [${timestamp}] ${getEventLabel('tool')}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                stepContainer.appendChild(step);
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-
-                // Update task status
-                fetch(`/tasks/${taskId}`)
-                    .then(response => response.json())
-                    .then(task => {
-                        updateTaskStatus(task);
-                    })
-                    .catch(error => {
-                        console.error('Status update failed:', error);
-                    });
-            } catch (e) {
-                console.error('Tool event handling failed:', e);
-            }
-        });
-
-        // Add handler for act event
-        eventSource.addEventListener('act', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                const step = document.createElement('div');
-                step.className = 'step-item act';
-                step.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-prefix">${getEventIcon('act')} [${timestamp}] ${getEventLabel('act')}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                stepContainer.appendChild(step);
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-
-                // Update task status
-                fetch(`/tasks/${taskId}`)
-                    .then(response => response.json())
-                    .then(task => {
-                        updateTaskStatus(task);
-                    })
-                    .catch(error => {
-                        console.error('Status update failed:', error);
-                    });
-            } catch (e) {
-                console.error('Act event handling failed:', e);
-            }
-        });
-
-        // Add handler for log event
-        eventSource.addEventListener('log', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                const step = document.createElement('div');
-                step.className = 'step-item log';
-                step.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-prefix">${getEventIcon('log')} [${timestamp}] ${getEventLabel('log')}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                stepContainer.appendChild(step);
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-
-                // Update task status
-                fetch(`/tasks/${taskId}`)
-                    .then(response => response.json())
-                    .then(task => {
-                        updateTaskStatus(task);
-                    })
-                    .catch(error => {
-                        console.error('Status update failed:', error);
-                    });
-            } catch (e) {
-                console.error('Log event handling failed:', e);
-            }
-        });
-
-        eventSource.addEventListener('run', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                const step = document.createElement('div');
-                step.className = 'step-item run';
-                step.innerHTML = `
-                    <div class="log-line">
-                        <span class="log-prefix">${getEventIcon('run')} [${timestamp}] ${getEventLabel('run')}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                stepContainer.appendChild(step);
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-
-                // Update task status
-                fetch(`/tasks/${taskId}`)
-                    .then(response => response.json())
-                    .then(task => {
-                        updateTaskStatus(task);
-                    })
-                    .catch(error => {
-                        console.error('Status update failed:', error);
-                    });
-            } catch (e) {
-                console.error('Run event handling failed:', e);
-            }
-        });
-
-        eventSource.addEventListener('message', (event) => {
-            clearInterval(heartbeatTimer);
-            try {
-                const data = JSON.parse(event.data);
-                container.querySelector('.loading')?.remove();
-
-                let stepContainer = container.querySelector('.step-container');
-                if (!stepContainer) {
-                    container.innerHTML = '<div class="step-container"></div>';
-                    stepContainer = container.querySelector('.step-container');
-                }
-
-                // Create new step element
-                const step = document.createElement('div');
-                step.className = `step-item ${data.type || 'step'}`;
-
-                // Format content and timestamp
-                const content = data.result;
-                const timestamp = new Date().toLocaleTimeString();
-
-                step.innerHTML = `
-                    <div class="log-line ${data.type || 'info'}">
-                        <span class="log-prefix">${getEventIcon(data.type)} [${timestamp}] ${getEventLabel(data.type)}:</span>
-                        <pre>${content}</pre>
-                    </div>
-                `;
-
-                // Add step to container with animation
-                stepContainer.prepend(step);
-                setTimeout(() => {
-                    step.classList.add('show');
-                }, 10);
-
-                // Auto-scroll to bottom
-                container.scrollTo({
-                    top: container.scrollHeight,
-                    behavior: 'smooth'
-                });
-            } catch (e) {
-                console.error('Message handling failed:', e);
-            }
-        });
-
         let isTaskComplete = false;
+        let lastResultContent = '';
+        let stepContainer = null;
 
-        eventSource.addEventListener('complete', (event) => {
-            isTaskComplete = true;
-            clearInterval(heartbeatTimer);
-            clearInterval(pollInterval);
-            container.innerHTML += `
-                <div class="complete">
-                    <div>✅ Task completed</div>
-                    <pre>${lastResultContent}</pre>
+        function ensureStepContainer() {
+            container.querySelector('.loading')?.remove();
+            const welcomeMessage = document.querySelector('.welcome-message');
+            if (welcomeMessage) {
+                welcomeMessage.style.display = 'none';
+            }
+
+            stepContainer = container.querySelector('.step-container');
+            if (!stepContainer) {
+                container.innerHTML = '<div class="step-container"></div>';
+                stepContainer = container.querySelector('.step-container');
+            }
+            return stepContainer;
+        }
+
+        function addEventToContainer(eventType, content) {
+            const stepContainer = ensureStepContainer();
+            
+            const timestamp = new Date().toLocaleTimeString();
+            
+            const step = document.createElement('div');
+            step.className = `step-item ${eventType}`;
+            
+            // Check if this is a model selection event
+            if (eventType === 'model' && content.includes('using')) {
+                const modelMatch = content.match(/using\s+(\S+)/i);
+                if (modelMatch && modelMatch[1]) {
+                    const model = modelMatch[1];
+                    modelUsage[model] = (modelUsage[model] || 0) + 1;
+                }
+            }
+            
+            // Check if this is a resource usage event
+            if (eventType === 'resource' && content.includes('Request cost:')) {
+                const costMatch = content.match(/Request cost: \$([\d.]+)/);
+                const tokensMatch = content.match(/Tokens used: (\d+)/);
+                
+                if (costMatch && costMatch[1]) {
+                    resourceStats.cost = parseFloat(costMatch[1]);
+                }
+                
+                if (tokensMatch && tokensMatch[1]) {
+                    resourceStats.tokens = parseInt(tokensMatch[1]);
+                }
+            }
+            
+            // Format the content based on type
+            let formattedContent = content;
+            
+            step.innerHTML = `
+                <div class="log-line ${eventType}">
+                    <span class="log-prefix">${getEventIcon(eventType)} [${timestamp}] ${getEventLabel(eventType)}</span>
+                    <pre>${formattedContent}</pre>
                 </div>
             `;
-            eventSource.close();
-            currentEventSource = null;
-            lastResultContent = ''; // Clear result content
+            
+            stepContainer.appendChild(step);
+            
+            // Auto-scroll
+            container.scrollTo({
+                top: container.scrollHeight,
+                behavior: 'smooth'
+            });
+        }
+
+        // Set up event listeners for all event types
+        const eventTypes = [
+            'status', 'think', 'tool', 'act', 'log', 'run', 
+            'model', 'info', 'resource', 'budget', 'error', 'complete'
+        ];
+        
+        eventTypes.forEach(eventType => {
+            eventSource.addEventListener(eventType, (event) => {
+                clearInterval(heartbeatTimer);
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (eventType === 'status') {
+                        // Handle status updates
+                        container.querySelector('.loading')?.remove();
+                        container.classList.add('active');
+                        
+                        // Save result content
+                        if (data.steps && data.steps.length > 0) {
+                            // Iterate through all steps, find the last result type
+                            for (let i = data.steps.length - 1; i >= 0; i--) {
+                                if (data.steps[i].type === 'result') {
+                                    lastResultContent = data.steps[i].result;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // Parse and display each step
+                        const stepContainer = ensureStepContainer();
+                        stepContainer.innerHTML = data.steps.map(step => {
+                            const content = step.result;
+                            const timestamp = new Date().toLocaleTimeString();
+                            return `
+                                <div class="step-item ${step.type || 'step'}">
+                                    <div class="log-line ${step.type || 'info'}">
+                                        <span class="log-prefix">${getEventIcon(step.type)} [${timestamp}] ${getEventLabel(step.type)}</span>
+                                        <pre>${content}</pre>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                    } else if (eventType === 'complete') {
+                        isTaskComplete = true;
+                        clearInterval(heartbeatTimer);
+                        clearInterval(pollInterval);
+                        
+                        const stepContainer = ensureStepContainer();
+                        
+                        // Create a completion message
+                        const complete = document.createElement('div');
+                        complete.className = 'complete';
+                        
+                        const modelUsageHtml = Object.entries(modelUsage).map(([model, count]) => 
+                            `<span class="model-badge">${model}: ${count}</span>`
+                        ).join('');
+                        
+                        let resourceHtml = '';
+                        if (resourceStats.cost || resourceStats.tokens) {
+                            resourceHtml = `
+                                <div class="resource-usage">
+                                    <h3>Resource Usage</h3>
+                                    <div class="stats-row">
+                                        ${resourceStats.cost ? `<span class="cost-badge">$${resourceStats.cost.toFixed(4)}</span>` : ''}
+                                        ${resourceStats.tokens ? `<span class="cost-badge">${resourceStats.tokens} tokens</span>` : ''}
+                                    </div>
+                                    <div class="model-usage">
+                                        ${modelUsageHtml}
+                                    </div>
+                                </div>
+                            `;
+                        }
+                        
+                        complete.innerHTML = `
+                            <div>✅ Task completed</div>
+                            <pre>${lastResultContent}</pre>
+                            ${resourceHtml}
+                        `;
+                        
+                        stepContainer.appendChild(complete);
+                        
+                        // Auto-scroll
+                        container.scrollTo({
+                            top: container.scrollHeight,
+                            behavior: 'smooth'
+                        });
+                        
+                        eventSource.close();
+                        currentEventSource = null;
+                        showToast("Task completed successfully", "success");
+                    } else if (eventType === 'error') {
+                        clearInterval(heartbeatTimer);
+                        clearInterval(pollInterval);
+                        
+                        const stepContainer = ensureStepContainer();
+                        
+                        const errorDiv = document.createElement('div');
+                        errorDiv.className = 'error';
+                        errorDiv.innerHTML = `❌ Error: ${data.message || 'Unknown error'}`;
+                        
+                        stepContainer.appendChild(errorDiv);
+                        
+                        eventSource.close();
+                        currentEventSource = null;
+                        showToast("Task failed", "error");
+                    } else {
+                        // Handle all other event types
+                        addEventToContainer(eventType, data.result);
+                    }
+                    
+                } catch (e) {
+                    console.error(`Error handling ${eventType} event:`, e);
+                }
+            });
         });
 
-        eventSource.addEventListener('error', (event) => {
-            clearInterval(heartbeatTimer);
-            clearInterval(pollInterval);
-            try {
-                const data = JSON.parse(event.data);
-                container.innerHTML += `
-                    <div class="error">
-                        ❌ Error: ${data.message}
-                    </div>
-                `;
-                eventSource.close();
-                currentEventSource = null;
-            } catch (e) {
-                console.error('Error handling failed:', e);
-            }
+        container.scrollTo({
+            top: container.scrollHeight,
+            behavior: 'smooth'
         });
-    }
-
-    container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'smooth'
-    });
 
         eventSource.onerror = (err) => {
             if (isTaskComplete) {
@@ -446,18 +290,20 @@ function setupSSE(taskId) {
 
             if (retryCount < maxRetries) {
                 retryCount++;
-                container.innerHTML += `
-                    <div class="warning">
-                        ⚠ Connection lost, retrying in ${retryDelay/1000} seconds (${retryCount}/${maxRetries})...
-                    </div>
-                `;
+                const warning = document.createElement('div');
+                warning.className = 'warning';
+                warning.innerHTML = `⚠ Connection lost, retrying in ${retryDelay/1000} seconds (${retryCount}/${maxRetries})...`;
+                
+                ensureStepContainer().appendChild(warning);
+                
                 setTimeout(connect, retryDelay);
             } else {
-                container.innerHTML += `
-                    <div class="error">
-                        ⚠ Connection lost, please try refreshing the page
-                    </div>
-                `;
+                const error = document.createElement('div');
+                error.className = 'error';
+                error.innerHTML = `⚠ Connection lost, please try refreshing the page`;
+                
+                ensureStepContainer().appendChild(error);
+                showToast("Connection to server lost", "error");
             }
         };
     }
@@ -475,6 +321,10 @@ function getEventIcon(eventType) {
         case 'complete': return '✅';
         case 'log': return '📝';
         case 'run': return '⚙️';
+        case 'model': return '🧠';
+        case 'resource': return '💰';
+        case 'budget': return '💸';
+        case 'info': return 'ℹ️';
         default: return 'ℹ️';
     }
 }
@@ -489,6 +339,10 @@ function getEventLabel(eventType) {
         case 'complete': return 'Complete';
         case 'log': return 'Log';
         case 'run': return 'Running';
+        case 'model': return 'Model Selection';
+        case 'resource': return 'Resource Usage';
+        case 'budget': return 'Budget Alert';
+        case 'info': return 'Info';
         default: return 'Info';
     }
 }
@@ -515,53 +369,77 @@ function loadHistory() {
             return response.json();
         })
         .then(tasks => {
-            const historyContainer = document.getElementById('history-container');
-            if (!historyContainer) return;
+            const taskList = document.getElementById('task-list');
+            if (!taskList) return;
 
-            historyContainer.innerHTML = '';
+            taskList.innerHTML = '';
 
             if (tasks.length === 0) {
-                historyContainer.innerHTML = '<div class="history-empty">No recent tasks</div>';
+                taskList.innerHTML = '<div class="history-empty">No recent tasks</div>';
                 return;
             }
 
-            const historyList = document.createElement('div');
-            historyList.className = 'history-list';
-
             tasks.forEach(task => {
+                // Extract the first few characters of the prompt
+                const shortPrompt = task.prompt.length > 50 
+                    ? task.prompt.substring(0, 50) + '...' 
+                    : task.prompt;
+                
+                // Determine status for styling
+                let statusClass = 'pending';
+                if (task.status === 'completed') statusClass = 'completed';
+                else if (task.status === 'running') statusClass = 'running';
+                else if (task.status.includes('failed')) statusClass = 'failed';
+                
                 const taskItem = document.createElement('div');
-                taskItem.className = `history-item ${task.status}`;
+                taskItem.className = `task-item ${statusClass}`;
                 taskItem.innerHTML = `
-                    <div class="history-prompt">${task.prompt}</div>
-                    <div class="history-meta">
-                        <span class="history-time">${new Date(task.created_at).toLocaleString()}</span>
-                        <span class="history-status">${getStatusIcon(task.status)}</span>
+                    <div class="task-prompt">${shortPrompt}</div>
+                    <div class="task-meta">
+                        <span class="task-time">${formatTime(new Date(task.created_at))}</span>
+                        <span class="task-status">${getStatusIcon(task.status)}</span>
                     </div>
                 `;
                 taskItem.addEventListener('click', () => {
                     loadTask(task.id);
                 });
-                historyList.appendChild(taskItem);
+                taskList.appendChild(taskItem);
             });
-
-            historyContainer.appendChild(historyList);
         })
         .catch(error => {
             console.error('Failed to load history:', error);
-            const historyContainer = document.getElementById('history-container');
-            if (historyContainer) {
-                historyContainer.innerHTML = `<div class="error">Failed to load history: ${error.message}</div>`;
-            }
+            showToast("Failed to load task history", "error");
         });
 }
 
-function getStatusIcon(status) {
-    switch(status) {
-        case 'completed': return '✅';
-        case 'failed': return '❌';
-        case 'running': return '⚙️';
-        default: return '⏳';
+function formatTime(date) {
+    // Get today's date
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Check if the date is today
+    if (date >= today) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
+    
+    // If it's within the last week, show day name
+    const lastWeek = new Date(today);
+    lastWeek.setDate(lastWeek.getDate() - 7);
+    
+    if (date >= lastWeek) {
+        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        return days[date.getDay()];
+    }
+    
+    // Otherwise show date
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+function getStatusIcon(status) {
+    if (status === 'completed') return '✅';
+    if (status.includes('failed')) return '❌';
+    if (status === 'running') return '⚙️';
+    return '⏳';
 }
 
 function loadTask(taskId) {
@@ -569,6 +447,10 @@ function loadTask(taskId) {
         currentEventSource.close();
         currentEventSource = null;
     }
+
+    // Reset model usage tracking
+    modelUsage = {};
+    resourceStats = {};
 
     const container = document.getElementById('task-container');
     container.innerHTML = '<div class="loading">Loading task...</div>';
@@ -591,6 +473,7 @@ function loadTask(taskId) {
         .catch(error => {
             console.error('Failed to load task:', error);
             container.innerHTML = `<div class="error">Failed to load task: ${error.message}</div>`;
+            showToast("Failed to load task", "error");
         });
 }
 
@@ -607,22 +490,50 @@ function displayTask(task) {
     const stepContainer = document.createElement('div');
     stepContainer.className = 'step-container';
 
+    // Extract model usage information
+    let extractedModels = new Set();
+    let resourceCost = null;
+    let resourceTokens = null;
+
     if (task.steps && task.steps.length > 0) {
         task.steps.forEach(step => {
+            // Create step display
             const stepItem = document.createElement('div');
             stepItem.className = `step-item ${step.type || 'step'}`;
 
             const content = step.result;
-            const timestamp = new Date(step.timestamp || task.created_at).toLocaleTimeString();
+            const timestamp = new Date(task.created_at).toLocaleTimeString();
 
             stepItem.innerHTML = `
-                <div class="log-line">
-                    <span class="log-prefix">${getEventIcon(step.type)} [${timestamp}] ${getEventLabel(step.type)}:</span>
+                <div class="log-line ${step.type || 'info'}">
+                    <span class="log-prefix">${getEventIcon(step.type)} [${timestamp}] ${getEventLabel(step.type)}</span>
                     <pre>${content}</pre>
                 </div>
             `;
 
             stepContainer.appendChild(stepItem);
+
+            // Extract model usage info
+            if (step.type === 'model' && content.includes('using')) {
+                const modelMatch = content.match(/using\s+(\S+)/i);
+                if (modelMatch && modelMatch[1]) {
+                    extractedModels.add(modelMatch[1]);
+                }
+            }
+            
+            // Extract resource usage info
+            if (step.type === 'resource' || step.type === 'info') {
+                const costMatch = content.match(/Request cost: \$([\d.]+)/);
+                const tokensMatch = content.match(/Tokens used: (\d+)/);
+                
+                if (costMatch && costMatch[1]) {
+                    resourceCost = parseFloat(costMatch[1]);
+                }
+                
+                if (tokensMatch && tokensMatch[1]) {
+                    resourceTokens = parseInt(tokensMatch[1]);
+                }
+            }
         });
     } else {
         stepContainer.innerHTML = '<div class="no-steps">No steps recorded for this task</div>';
@@ -630,65 +541,147 @@ function displayTask(task) {
 
     container.appendChild(stepContainer);
 
-    if (task.status === 'completed') {
-        let lastResultContent = '';
-        if (task.steps && task.steps.length > 0) {
-            for (let i = task.steps.length - 1; i >= 0; i--) {
-                if (task.steps[i].type === 'result') {
-                    lastResultContent = task.steps[i].result;
-                    break;
-                }
+    // Find the last result content
+    let lastResultContent = '';
+    if (task.steps && task.steps.length > 0) {
+        for (let i = task.steps.length - 1; i >= 0; i--) {
+            if (task.steps[i].type === 'result') {
+                lastResultContent = task.steps[i].result;
+                break;
             }
         }
-
-        container.innerHTML += `
-            <div class="complete">
-                <div>✅ Task completed</div>
-                <pre>${lastResultContent}</pre>
-            </div>
-        `;
-    } else if (task.status === 'failed') {
-        container.innerHTML += `
-            <div class="error">
-                ❌ Error: ${task.error || 'Unknown error'}
-            </div>
-        `;
     }
 
-    updateTaskStatus(task);
+    // Add completion or error message
+    if (task.status === 'completed') {
+        const complete = document.createElement('div');
+        complete.className = 'complete';
+        
+        // Create model usage HTML if models were used
+        let modelUsageHtml = '';
+        if (extractedModels.size > 0) {
+            modelUsageHtml = Array.from(extractedModels).map(model => 
+                `<span class="model-badge">${model}</span>`
+            ).join('');
+        }
+        
+        // Create resource usage HTML if cost or tokens were recorded
+        let resourceHtml = '';
+        if (resourceCost || resourceTokens) {
+            resourceHtml = `
+                <div class="resource-usage">
+                    <h3>Resource Usage</h3>
+                    <div class="stats-row">
+                        ${resourceCost ? `<span class="cost-badge">$${resourceCost.toFixed(4)}</span>` : ''}
+                        ${resourceTokens ? `<span class="cost-badge">${resourceTokens} tokens</span>` : ''}
+                    </div>
+                    <div class="model-usage">
+                        ${modelUsageHtml}
+                    </div>
+                </div>
+            `;
+        }
+        
+        complete.innerHTML = `
+            <div>✅ Task completed</div>
+            <pre>${lastResultContent}</pre>
+            ${resourceHtml}
+        `;
+        
+        container.appendChild(complete);
+    } else if (task.status.includes('failed')) {
+        const error = document.createElement('div');
+        error.className = 'error';
+        error.innerHTML = `❌ Error: ${task.status.replace('failed: ', '')}`;
+        container.appendChild(error);
+    }
+}
+
+function showToast(message, type = "info") {
+    // Check if toast container exists, create if not
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        toastContainer.style.position = 'fixed';
+        toastContainer.style.bottom = '20px';
+        toastContainer.style.right = '20px';
+        toastContainer.style.zIndex = '1000';
+        document.body.appendChild(toastContainer);
+    }
+    
+    // Create toast element
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    toast.style.backgroundColor = type === 'error' ? '#e5383b' : 
+                                 type === 'success' ? '#38b000' : '#4cc9f0';
+    toast.style.color = 'white';
+    toast.style.padding = '12px 20px';
+    toast.style.borderRadius = '8px';
+    toast.style.marginTop = '10px';
+    toast.style.boxShadow = '0 4px 8px rgba(0,0,0,0.1)';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(20px)';
+    toast.style.transition = 'all 0.3s ease';
+    toast.style.cursor = 'pointer';
+    toast.style.fontSize = '14px';
+    toast.style.fontWeight = '500';
+    toast.style.display = 'flex';
+    toast.style.alignItems = 'center';
+    toast.style.gap = '8px';
+    
+    // Add icon based on type
+    const icon = type === 'error' ? '❌' : 
+                type === 'success' ? '✅' : 'ℹ️';
+    
+    toast.innerHTML = `${icon} ${message}`;
+    
+    // Add toast to container
+    toastContainer.appendChild(toast);
+    
+    // Animate in
+    setTimeout(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+    }, 10);
+    
+    // Auto dismiss
+    const dismissTime = 5000;
+    const removeTimeout = setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(20px)';
+        
+        setTimeout(() => {
+            toastContainer.removeChild(toast);
+        }, 300);
+    }, dismissTime);
+    
+    // Click to dismiss early
+    toast.addEventListener('click', () => {
+        clearTimeout(removeTimeout);
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(20px)';
+        
+        setTimeout(() => {
+            if (toastContainer.contains(toast)) {
+                toastContainer.removeChild(toast);
+            }
+        }, 300);
+    });
 }
 
 // Initialize the app when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
 
-    // Set up event listeners
-    document.getElementById('create-task-btn').addEventListener('click', createTask);
-    document.getElementById('prompt-input').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            createTask();
-        }
-    });
-
-    // Show history button functionality
-    const historyToggle = document.getElementById('history-toggle');
-    if (historyToggle) {
-        historyToggle.addEventListener('click', () => {
-            const historyPanel = document.getElementById('history-panel');
-            if (historyPanel) {
-                historyPanel.classList.toggle('open');
-                historyToggle.classList.toggle('active');
+    // Set up event listeners for prompt input
+    const promptInput = document.getElementById('prompt-input');
+    if (promptInput) {
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                createTask();
             }
-        });
-    }
-
-    // Clear button functionality
-    const clearButton = document.getElementById('clear-btn');
-    if (clearButton) {
-        clearButton.addEventListener('click', () => {
-            document.getElementById('prompt-input').value = '';
-            document.getElementById('prompt-input').focus();
         });
     }
 });
