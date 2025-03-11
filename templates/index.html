@@ -3,21 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenManus Local Version</title>
+    <title>ManusPrime - Multi-Model AI Agent</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧠</text></svg>">
 </head>
 <body>
     <div class="container">
         <div class="history-panel">
-            <h2>History Tasks</h2>
+            <h2>Task History</h2>
             <div id="task-list" class="task-list"></div>
         </div>
 
         <div class="main-panel">
             <div id="task-container" class="task-container">
                 <div class="welcome-message">
-                    <h1>Welcome to OpenManus Local Version</h1>
-                    <p>Please enter a task prompt to start a new task</p>
+                    <h1>Welcome to ManusPrime</h1>
+                    <p>The intelligent multi-model AI agent that selects the optimal model for each task. Enter a prompt below to begin.</p>
                 </div>
                 <div id="log-container" class="step-container"></div>
             </div>
@@ -26,10 +30,16 @@
                 <input
                     type="text"
                     id="prompt-input"
-                    placeholder="Enter task prompt..."
+                    placeholder="Enter your task or question..."
                     onkeypress="if(event.keyCode === 13) createTask()"
                 >
-                <button onclick="createTask()">Create Task</button>
+                <button onclick="createTask()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                    Run
+                </button>
             </div>
         </div>
     </div>
