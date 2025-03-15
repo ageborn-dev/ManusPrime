@@ -6,13 +6,23 @@ ManusPrime is an advanced multi-model AI agent framework that orchestrates vario
 
 ## 🚀 Key Features
 
-- **Multi-Model Orchestration**: Dynamically select the most appropriate AI model for each task
-- **Model-Agnostic Architecture**: Support for OpenAI, Anthropic, Google, and open-source models
-- **Enhanced Memory System**: Improved context management with vector storage for long-term memory
-- **Advanced Planning**: Hierarchical planning with verification and parallel execution
-- **Specialized Agents**: Purpose-built agents for coding, research, planning, and more
-- **Powerful Tool Ecosystem**: Rich set of tools for interacting with the digital world
-- **Cost Optimization**: Use expensive models only when necessary
+- **Smart Model Selection**: Automatically selects the most appropriate AI model based on task type and complexity
+  - Uses specialized coding models for development tasks
+  - Leverages powerful models for complex reasoning
+  - Falls back to efficient models for general tasks
+- **Advanced Memory System**: Improved context management with vector storage 
+- **Resource Optimization**: Sophisticated monitoring and control of resource usage
+  - Token usage tracking and cost monitoring
+  - Budget enforcement and optimization
+  - Performance metrics and usage statistics
+- **Resilient Error Handling**: Comprehensive error recovery and retry mechanisms
+  - Automatic retries with exponential backoff
+  - Graceful degradation with model fallbacks
+  - Detailed error tracking and reporting
+- **Multi-Format Output**: Support for generating content in various formats
+  - Desktop/mobile/print-optimized versions
+  - Format-specific optimizations and features
+  - Consistent core content across formats
 
 ## 💡 Philosophy
 
@@ -29,12 +39,31 @@ This approach results in better performance, lower costs, and more robust capabi
 
 ManusPrime consists of several key components:
 
-1. **Model Abstraction Layer**: Provides a unified interface to different AI models
-2. **Model Router**: Intelligently selects the best model for each task
-3. **Agent Framework**: Specialized agents for different domains
-4. **Memory System**: Manages context and knowledge across conversations
-5. **Tool Ecosystem**: Provides capabilities for interacting with the world
-6. **Flow Engine**: Coordinates the execution of complex, multi-step tasks
+1. **Model Router**: 
+   - Dynamic model selection based on task analysis
+   - Automatic fallback strategies
+   - Cost-aware routing decisions
+
+2. **Resource Monitor**:
+   - Real-time token usage tracking
+   - Cost monitoring and budget enforcement
+   - Performance metrics collection
+   - Usage statistics and reporting
+
+3. **Memory System**: 
+   - Vector-based long-term storage
+   - Efficient context management
+   - Cross-conversation knowledge retention
+
+4. **Tool Ecosystem**: 
+   - Rich set of built-in tools
+   - Custom tool development framework
+   - Tool usage optimization
+
+5. **Flow Engine**: 
+   - Multi-step task coordination
+   - Parallel execution capabilities
+   - Progress tracking and recovery
 
 ## 📋 Installation
 
@@ -57,27 +86,25 @@ cp config/config.example.toml config/config.toml
 
 ## ⚙️ Configuration
 
-ManusPrime requires configuration for the AI model APIs it uses. Add your API keys to the configuration file:
-
 ```toml
-# Global LLM configuration (Default model)
+# Global LLM configuration
 [llm.default]
 provider = "openai"
 model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Replace with your actual API key
+api_key = "sk-..."
 max_tokens = 4096
 temperature = 0.0
 
-# Anthropic Claude configuration
-[llm.claude]
-provider = "anthropic"
-model = "claude-3-opus-20240229"
-api_key = "sk-ant-..."
-max_tokens = 4096
-temperature = 0.0
+# Coding-specific model
+[llm.code]
+provider = "deepseek"
+model = "deepseek-chat"
+api_key = "sk-..."
 
-# Add more model configurations as needed
+# Budget controls
+[monitoring]
+budget_limit = 10.0  # Optional daily budget limit
+track_usage = true
 ```
 
 ## 🚀 Quick Start
@@ -86,27 +113,93 @@ temperature = 0.0
 from manusprime.app.flow import FlowFactory, FlowType
 from manusprime.app.agent import ManusPrimeAgent
 
-# Create a ManusPrime agent with multi-model capabilities
-agent = ManusPrimeAgent()
+# Create agent with budget control
+agent = ManusPrimeAgent(budget_limit=10.0)
 
-# Run the agent with a task
-result = await agent.run("Build a simple weather dashboard website using React")
+# Task-specific model selection happens automatically
+result = await agent.run("Write a Python script")  # Uses deepseek-chat
+result = await agent.run("Create a travel plan")   # Uses gpt-4o
+result = await agent.run("Quick question")         # Uses gpt-4o-mini
+
+# Multi-format output generation
+travel_guide = await agent.run({
+    "task": "Create Japan travel guide",
+    "formats": ["detailed", "mobile", "print"]
+})
+
+# Access usage statistics
+usage = resource_monitor.get_summary()
+print(f"Total cost: ${usage['cost']:.2f}")
+print(f"Models used: {usage['models']}")
 ```
 
-## 🔍 Example Use Cases
+## 🔍 Advanced Usage
 
-- **Software Development**: Build applications, debug code, create websites
-- **Research & Analysis**: Gather information, analyze data, create reports
-- **Content Creation**: Write articles, generate creative content, edit documents
-- **Task Automation**: Interact with websites, process data, manage files
+### Error Handling
+
+```python
+# Configure retry behavior
+agent.llm.configure_retries(
+    max_attempts=6,
+    min_wait=1,
+    max_wait=60
+)
+
+# Handle specific error cases
+try:
+    result = await agent.run("Complex task")
+except BudgetExceededError:
+    # Switch to more cost-effective model
+    result = await agent.run("Complex task", model="gpt-4o-mini")
+```
+
+### Resource Monitoring
+
+```python
+# Start monitoring session
+resource_monitor.start_session(budget_limit=10.0)
+
+# Add custom budget handler
+def on_budget_exceeded(current_cost, limit):
+    notify_admin(f"Budget ${current_cost:.2f} exceeded limit ${limit:.2f}")
+
+resource_monitor.add_budget_listener(on_budget_exceeded)
+
+# Get detailed metrics
+metrics = resource_monitor.get_metrics()
+print(f"Average response time: {metrics['avg_response_time']:.2f}s")
+print(f"Token efficiency: {metrics['tokens_per_dollar']:.0f} tokens/$")
+```
+
+### Multi-Format Output
+
+```python
+# Generate content with format-specific optimizations
+result = await agent.run({
+    "task": "Create documentation",
+    "formats": [{
+        "type": "detailed",
+        "include_examples": true
+    }, {
+        "type": "mobile",
+        "optimize_images": true,
+        "enable_dark_mode": true
+    }, {
+        "type": "print",
+        "page_size": "A4",
+        "include_toc": true
+    }]
+})
+```
 
 ## 🌱 Project Status
 
-ManusPrime is under active development. The current focus is on:
+ManusPrime is under active development. Current focus areas:
 
-- Establishing the model abstraction layer
-- Implementing the enhanced memory system
-- Refactoring the agent infrastructure for multi-model support
+- Enhancing model selection algorithms
+- Expanding the tool ecosystem
+- Improving resource optimization
+- Adding new output format capabilities
 
 ## 🤝 Contributing
 
