@@ -108,8 +108,8 @@ class GeminiProvider(BaseProvider):
                 content=response.text,
                 model=model,
                 usage=usage,
-                finish_reason=response.prompt_feedback.stop_reason,
-                raw_response=response.candidates[0]
+                finish_reason=response.prompt_feedback.stop_reason if hasattr(response, 'prompt_feedback') else None,
+                raw_response=response.candidates[0] if hasattr(response, 'candidates') else None
             )
 
         except Exception as e:
@@ -150,6 +150,9 @@ class GeminiProvider(BaseProvider):
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a response that may include tool calls."""
@@ -164,6 +167,10 @@ class GeminiProvider(BaseProvider):
             # Convert tools to Gemini's function declarations format
             function_declarations = self._convert_tools_to_functions(tools)
             
+            # Skip tools if tool_choice is "none"
+            if tool_choice == "none":
+                function_declarations = []
+            
             # Get model instance
             model_instance = genai.GenerativeModel(model)
 
@@ -171,9 +178,10 @@ class GeminiProvider(BaseProvider):
                 formatted_prompt,
                 generation_config={
                     "temperature": temperature,
+                    "max_output_tokens": max_tokens or 8192,
                     **kwargs
                 },
-                tools=function_declarations
+                tools=function_declarations if function_declarations else None
             )
 
             # Track usage
@@ -187,13 +195,15 @@ class GeminiProvider(BaseProvider):
             # Extract tool calls if present
             tool_calls = []
             if hasattr(response, 'tool_calls') and response.tool_calls:
-                tool_calls = [
-                    {
-                        "name": call.function_name,
-                        "parameters": call.function_parameters
-                    }
-                    for call in response.tool_calls
-                ]
+                for idx, call in enumerate(response.tool_calls):
+                    tool_calls.append({
+                        'id': f"call_{idx}",
+                        'type': 'function',
+                        'function': {
+                            'name': call.function_name,
+                            'arguments': call.function_parameters
+                        }
+                    })
 
             return {
                 "content": response.text if not tool_calls else None,
@@ -232,7 +242,7 @@ class GeminiProvider(BaseProvider):
             elif role == "assistant":
                 formatted.append(f"Assistant: {content}")
             elif role == "tool":
-                formatted.append(f"Tool Response: {content}")
+                formatted.append(f"Tool Response from {msg.get('name', 'tool')}: {content}")
                 
         return "\n".join(formatted)
 
@@ -240,11 +250,12 @@ class GeminiProvider(BaseProvider):
         """Convert OpenAI-style tools to Gemini function declarations."""
         function_declarations = []
         for tool in tools:
-            function_declarations.append({
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("parameters", {})
-            })
+            if tool["type"] == "function":
+                function_declarations.append({
+                    "name": tool["function"]["name"],
+                    "description": tool["function"].get("description", ""),
+                    "parameters": tool["function"].get("parameters", {})
+                })
         return function_declarations
 
     def supports_tools(self) -> bool:
@@ -274,13 +285,13 @@ class GeminiProvider(BaseProvider):
             },
             "supports_vision": True,
             "supports_embeddings": True,
-            "supports_audio": True,  # Coming soon
+            "supports_audio": True,
             "supports_video": True,
-            "supports_image_generation": True,  # Coming soon
+            "supports_image_generation": True,
             "cost_per_1k": self._model_costs,
             "features": {
-                "multimodal_live": True,  # Newly supported
-                "native_tool_use": True,  # For Gemini 2.0 Flash
+                "multimodal_live": True,
+                "native_tool_use": True,
                 "code_execution": True,
                 "structured_output": True
             }

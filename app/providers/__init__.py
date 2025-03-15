@@ -1,13 +1,11 @@
 from .base import BaseProvider, ProviderConfig, ProviderResponse, ModelUsage
-from .registry import ProviderRegistry
+from .registry import ProviderRegistry, provider_registry
 from .openai import OpenAIProvider
 from .gemini import GeminiProvider
 from .anthropic import AnthropicProvider
 from .mistral import MistralProvider
 from .deepseek import DeepSeekProvider
-
-# Initialize the global provider registry
-provider_registry = ProviderRegistry()
+from .ollama import OllamaProvider
 
 # Register all available provider classes
 provider_registry.register_provider_class("openai", OpenAIProvider)
@@ -15,6 +13,7 @@ provider_registry.register_provider_class("gemini", GeminiProvider)
 provider_registry.register_provider_class("anthropic", AnthropicProvider)
 provider_registry.register_provider_class("mistral", MistralProvider)
 provider_registry.register_provider_class("deepseek", DeepSeekProvider)
+provider_registry.register_provider_class("ollama", OllamaProvider)
 
 __all__ = [
     # Base classes
@@ -30,6 +29,7 @@ __all__ = [
     "AnthropicProvider",
     "MistralProvider",
     "DeepSeekProvider",
+    "OllamaProvider",
     
     # Global registry instance
     "provider_registry",
@@ -58,6 +58,11 @@ MODEL_TO_PROVIDER = {
     # DeepSeek models
     "deepseek-chat": "deepseek",
     "deepseek-reasoner": "deepseek",
+    
+    # Ollama models (these are examples, actual models depend on local installation)
+    "llama2": "ollama",
+    "codellama": "ollama",
+    "mistral-local": "ollama"
 }
 
 # Define task-specific model defaults

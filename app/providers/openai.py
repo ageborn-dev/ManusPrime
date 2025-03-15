@@ -131,6 +131,9 @@ class OpenAIProvider(BaseProvider):
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a response that may include tool calls."""
@@ -142,11 +145,20 @@ class OpenAIProvider(BaseProvider):
             else:
                 messages = [{"role": "user", "content": prompt}]
 
+            # Map tool_choice to OpenAI format
+            openai_tool_choice = tool_choice
+            if tool_choice == "required" and tools:
+                openai_tool_choice = {"type": "function", "function": {"name": tools[0]["function"]["name"]}}
+            elif tool_choice == "none":
+                openai_tool_choice = "none"
+
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
+                max_tokens=max_tokens or 4096,
                 tools=tools,
+                tool_choice=openai_tool_choice,
                 **kwargs
             )
 

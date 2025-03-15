@@ -206,6 +206,9 @@ class DeepSeekProvider(BaseProvider):
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a response that may include tool calls."""
@@ -222,15 +225,23 @@ class DeepSeekProvider(BaseProvider):
             model_caps = self.get_capabilities()["max_tokens"][model]
             default_max_tokens = model_caps["output"]
 
+            # Map tool_choice to DeepSeek format (which uses OpenAI format)
+            ds_tool_choice = tool_choice
+            if tool_choice == "required" and tools:
+                ds_tool_choice = {"type": "function", "function": {"name": tools[0]["function"]["name"]}}
+            elif tool_choice == "none":
+                ds_tool_choice = "none"
+                tools = []
+
             # Prepare request payload
             payload = {
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
                 "max_tokens": default_max_tokens,
-                "tools": tools,
-                "context_caching": True,
-                **kwargs
+                "tools": tools if tools else None,
+                "tool_choice": ds_tool_choice,
+                "context_caching": True
             }
 
             if model == "deepseek-reasoner":
@@ -254,13 +265,15 @@ class DeepSeekProvider(BaseProvider):
             tool_calls = []
             message = data["choices"][0]["message"]
             if "tool_calls" in message:
-                tool_calls = [
-                    {
-                        "name": call["function"]["name"],
-                        "parameters": call["function"]["arguments"]
-                    }
-                    for call in message["tool_calls"]
-                ]
+                for idx, call in enumerate(message["tool_calls"]):
+                    tool_calls.append({
+                        'id': call.get('id', f"call_{idx}"),
+                        'type': 'function',
+                        'function': {
+                            'name': call["function"]["name"],
+                            'arguments': call["function"]["arguments"]
+                        }
+                    })
 
             return {
                 "content": message["content"] if not tool_calls else None,
@@ -297,7 +310,7 @@ class DeepSeekProvider(BaseProvider):
                 # Add tool responses as assistant messages
                 formatted.append({
                     "role": "assistant",
-                    "content": f"Tool Response: {msg['content']}"
+                    "content": f"Tool Response from {msg.get('name', 'tool')}: {msg['content']}"
                 })
         return formatted
 

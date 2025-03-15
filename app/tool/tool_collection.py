@@ -7,12 +7,19 @@ from pathlib import Path
 from app.tool.base import BaseTool
 from app.tool.zapier_tool import ZapierTool
 from app.logger import logger
+from app.config import config
 
 class ToolCollection:
     """Collection of available tools."""
     
-    def __init__(self):
+    def __init__(self, *tools):
         self._tools: Dict[str, BaseTool] = {}
+        
+        # Register initial tools if provided
+        for tool in tools:
+            self.add_tool(tool)
+            
+        # Load additional tools
         self._load_tools()
 
     def _load_tools(self):
@@ -32,11 +39,14 @@ class ToolCollection:
 
     def _register_builtin_tools(self):
         """Register built-in tools."""
-        builtin_tools = [
-            # Add your built-in tools here
-            ZapierTool(),  # Register Zapier tool
-        ]
+        builtin_tools = []
         
+        # Add Zapier tool if enabled in config
+        if config.zapier.enabled:
+            builtin_tools.append(ZapierTool())
+            logger.info("Zapier integration enabled - registered Zapier tool")
+        
+        # Register all built-in tools
         for tool in builtin_tools:
             self.register_tool(tool)
 
@@ -61,6 +71,11 @@ class ToolCollection:
                             issubclass(obj, BaseTool) and 
                             obj != BaseTool):
                             try:
+                                # Check if tool should be registered based on config
+                                if name == "ZapierTool" and not config.zapier.enabled:
+                                    logger.debug("Skipping ZapierTool as it's disabled in config")
+                                    continue
+                                    
                                 # Instantiate and register the tool
                                 tool = obj()
                                 self.register_tool(tool)
@@ -83,38 +98,46 @@ class ToolCollection:
             
         self._tools[tool.name] = tool
         logger.debug(f"Registered tool: {tool.name}")
+        
+    def add_tool(self, tool: BaseTool):
+        """Alias for register_tool."""
+        self.register_tool(tool)
 
     def get_tool(self, name: str) -> Optional[BaseTool]:
         """Get a tool by name."""
         return self._tools.get(name)
+        
+    @property
+    def tool_map(self) -> Dict[str, BaseTool]:
+        """Get a mapping of tool names to tools."""
+        return self._tools.copy()
 
     def list_tools(self) -> List[Dict]:
         """List all available tools with their schemas."""
-        return [tool.get_tool_schema() for tool in self._tools.values()]
+        return [tool.to_param() for tool in self._tools.values()]
+        
+    def to_params(self) -> List[Dict]:
+        """Convert tools to function call format for LLM."""
+        return [tool.to_param() for tool in self._tools.values()]
 
     def get_tool_help(self, name: str) -> Optional[str]:
         """Get help text for a specific tool."""
         tool = self.get_tool(name)
         if tool:
-            return tool.help_text
+            return tool.help_text if hasattr(tool, 'help_text') else tool.description
         return None
 
     def get_tool_example(self, name: str) -> Optional[str]:
         """Get example usage for a specific tool."""
         tool = self.get_tool(name)
         if tool:
-            return tool.example_usage
+            return tool.example_usage if hasattr(tool, 'example_usage') else None
         return None
 
-    async def execute_tool(
-        self,
-        name: str,
-        parameters: Dict,
-        task_id: Optional[str] = None
-    ) -> Dict:
+    async def execute(self, name: str, tool_input: Dict) -> Any:
         """Execute a tool by name."""
         tool = self.get_tool(name)
         if not tool:
             raise ValueError(f"Tool not found: {name}")
             
-        return await tool.execute(parameters, task_id)
+        return await tool.execute(**tool_input)

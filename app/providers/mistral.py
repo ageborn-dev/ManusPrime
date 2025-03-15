@@ -147,6 +147,9 @@ class MistralProvider(BaseProvider):
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a response that may include tool calls."""
@@ -158,8 +161,17 @@ class MistralProvider(BaseProvider):
             else:
                 messages = [{"role": "user", "content": prompt}]
 
-            # Convert tools to Mistral's tool format
-            tools_config = self._convert_tools_to_mistral(tools)
+            # Convert tools to Mistral's format
+            mistral_tools = self._convert_tools_to_mistral(tools)
+            
+            # Skip tools if tool_choice is "none"
+            if tool_choice == "none":
+                mistral_tools = []
+
+            # Handle tool_choice
+            mistral_kwargs = {}
+            if tool_choice == "required" and mistral_tools:
+                mistral_kwargs["tool_choice"] = "any"  # Mistral doesn't have exact equivalent to "required"
 
             # Set max tokens based on model capabilities
             model_max_tokens = self.get_capabilities()["max_tokens"].get(model, 4096)
@@ -168,25 +180,27 @@ class MistralProvider(BaseProvider):
                 model=model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=model_max_tokens,
-                tools=tools_config,
-                **kwargs
+                max_tokens=max_tokens or model_max_tokens,
+                tools=mistral_tools if mistral_tools else None,
+                **{**kwargs, **mistral_kwargs}
             )
 
-            # Track usage
+# Track usage
             self.total_tokens_used += response.usage.total_tokens
             self.requests_made += 1
 
             # Extract tool calls if present
             tool_calls = []
             if hasattr(response.choices[0].message, 'tool_calls') and response.choices[0].message.tool_calls:
-                tool_calls = [
-                    {
-                        "name": call.function.name,
-                        "parameters": call.function.arguments
-                    }
-                    for call in response.choices[0].message.tool_calls
-                ]
+                for idx, call in enumerate(response.choices[0].message.tool_calls):
+                    tool_calls.append({
+                        'id': call.id if hasattr(call, 'id') else f"call_{idx}",
+                        'type': 'function',
+                        'function': {
+                            'name': call.function.name,
+                            'arguments': call.function.arguments
+                        }
+                    })
 
             return {
                 "content": response.choices[0].message.content if not tool_calls else None,
@@ -214,36 +228,43 @@ class MistralProvider(BaseProvider):
     def _format_messages(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """Format messages for Mistral API."""
         formatted = []
+        system_content = None
+        
         for msg in messages:
             if msg["role"] == "system":
-                # Mistral doesn't have explicit system messages, prepend to first user message
-                if formatted and formatted[0]["role"] == "user":
-                    formatted[0]["content"] = f"{msg['content']}\n\n{formatted[0]['content']}"
-                else:
-                    formatted.append({"role": "user", "content": msg["content"]})
+                # Mistral doesn't have explicit system messages, collect for prepending
+                system_content = msg["content"]
             elif msg["role"] in ["user", "assistant"]:
                 formatted.append({"role": msg["role"], "content": msg["content"]})
             elif msg["role"] == "tool":
                 # Add tool responses in a format Mistral understands
                 formatted.append({
-                    "role": "assistant",
-                    "content": f"Tool Response: {msg['content']}"
+                    "role": "user",
+                    "content": f"Tool Response from {msg.get('name', 'tool')}: {msg['content']}"
                 })
+        
+        # Prepend system message to first user message if present
+        if system_content and formatted and formatted[0]["role"] == "user":
+            formatted[0]["content"] = f"{system_content}\n\n{formatted[0]['content']}"
+        elif system_content:
+            formatted.append({"role": "user", "content": system_content})
+            
         return formatted
 
     def _convert_tools_to_mistral(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI-style tools to Mistral format."""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {})
-                }
-            }
-            for tool in tools
-        ]
+        mistral_tools = []
+        for tool in tools:
+            if tool["type"] == "function":
+                mistral_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["function"]["name"],
+                        "description": tool["function"].get("description", ""),
+                        "parameters": tool["function"].get("parameters", {})
+                    }
+                })
+        return mistral_tools
 
     def supports_tools(self) -> bool:
         """Mistral supports tool/function calling."""

@@ -74,6 +74,11 @@ class AnthropicProvider(BaseProvider):
             else:
                 default_max_tokens = 8192 if model == "claude-3.5-haiku" else 4096
             
+            # Add extended thinking system prompt if needed
+            additional_kwargs = {}
+            if extended_thinking and model == "claude-3.7-sonnet":
+                additional_kwargs["system"] = "Take a deep breath and work on this step-by-step."
+            
             # Generate response
             response = await self.client.messages.create(
                 model=model,
@@ -81,7 +86,7 @@ class AnthropicProvider(BaseProvider):
                 temperature=temperature,
                 max_tokens=max_tokens or default_max_tokens,
                 stream=False,
-                **kwargs
+                **{**kwargs, **additional_kwargs}
             )
 
             # Track usage
@@ -150,6 +155,9 @@ class AnthropicProvider(BaseProvider):
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a response that may include tool calls."""
@@ -164,13 +172,32 @@ class AnthropicProvider(BaseProvider):
 
             # Convert tools to Anthropic's tool format
             tools_config = self._convert_tools_to_anthropic(tools)
+            
+            # Skip tools if tool_choice is "none"
+            if tool_choice == "none":
+                tools_config = []
+                
+            # Set max tokens based on model and mode
+            if model == "claude-3.7-sonnet":
+                if extended_thinking:
+                    default_max_tokens = 64000  # Extended thinking mode
+                else:
+                    default_max_tokens = 8192   # Normal mode
+            else:
+                default_max_tokens = 8192 if model == "claude-3.5-haiku" else 4096
+                
+            # Add extended thinking system prompt if needed
+            additional_kwargs = {}
+            if extended_thinking and model == "claude-3.7-sonnet":
+                additional_kwargs["system"] = "Take a deep breath and work on this step-by-step."
 
             response = await self.client.messages.create(
                 model=model,
                 messages=messages,
                 temperature=temperature,
+                max_tokens=max_tokens or default_max_tokens,
                 tools=tools_config,
-                **kwargs
+                **{**kwargs, **additional_kwargs}
             )
 
             # Track usage
@@ -180,13 +207,15 @@ class AnthropicProvider(BaseProvider):
             # Extract tool calls if present
             tool_calls = []
             if response.tool_calls:
-                tool_calls = [
-                    {
-                        "name": call.function.name,
-                        "parameters": call.function.arguments
-                    }
-                    for call in response.tool_calls
-                ]
+                for idx, call in enumerate(response.tool_calls):
+                    tool_calls.append({
+                        'id': call.id if hasattr(call, 'id') else f"call_{idx}",
+                        'type': 'function',
+                        'function': {
+                            'name': call.function.name,
+                            'arguments': call.function.arguments
+                        }
+                    })
 
             return {
                 "content": response.content[0].text if not tool_calls else None,
@@ -222,26 +251,27 @@ class AnthropicProvider(BaseProvider):
             elif msg["role"] == "assistant":
                 formatted.append({"role": "assistant", "content": msg["content"]})
             elif msg["role"] == "tool":
-                # Add tool responses as assistant messages with a tool prefix
+                # Add tool responses as user messages with a tool prefix
                 formatted.append({
-                    "role": "assistant",
-                    "content": f"Tool Response: {msg['content']}"
+                    "role": "user",
+                    "content": f"Tool Response from {msg.get('name', 'tool')}: {msg['content']}"
                 })
         return formatted
 
     def _convert_tools_to_anthropic(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI-style tools to Anthropic format."""
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {})
-                }
-            }
-            for tool in tools
-        ]
+        anthropic_tools = []
+        for tool in tools:
+            if tool["type"] == "function":
+                anthropic_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["function"]["name"],
+                        "description": tool["function"].get("description", ""),
+                        "parameters": tool["function"].get("parameters", {})
+                    }
+                })
+        return anthropic_tools
 
     def supports_tools(self) -> bool:
         """Anthropic supports tool/function calling."""

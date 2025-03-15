@@ -1,7 +1,9 @@
 from typing import Any, Dict, List, Optional, Union, AsyncGenerator
 import aiohttp
 import json
-from .base import BaseProvider, ProviderConfig, ProviderResponse
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+
+from .base import BaseProvider, ProviderConfig, ProviderResponse, ModelUsage
 from app.logger import logger
 
 class OllamaProvider(BaseProvider):
@@ -10,6 +12,8 @@ class OllamaProvider(BaseProvider):
     def __init__(self, config: Union[Dict[str, Any], ProviderConfig]):
         super().__init__(config)
         self.session = None
+        self.total_tokens_used = 0
+        self.requests_made = 0
 
     async def _ensure_session(self):
         """Ensure aiohttp session exists."""
@@ -25,9 +29,13 @@ class OllamaProvider(BaseProvider):
             await self.session.close()
             self.session = None
 
+    @retry(
+        wait=wait_random_exponential(min=1, max=60),
+        stop=stop_after_attempt(3),
+    )
     async def generate(
         self,
-        prompt: str,
+        prompt: Union[str, List[Dict[str, str]]],
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
@@ -41,7 +49,7 @@ class OllamaProvider(BaseProvider):
 
             # Format messages if needed
             if isinstance(prompt, list):
-                prompt = self.format_prompt(prompt)
+                prompt = self._format_chat_prompt(prompt)
 
             # Prepare request payload
             payload = {
@@ -65,18 +73,27 @@ class OllamaProvider(BaseProvider):
                 data = await response.json()
                 
                 # Estimate token usage (Ollama doesn't provide this directly)
-                prompt_tokens = len(prompt.split())
+                prompt_tokens = len(prompt.split()) if isinstance(prompt, str) else sum(len(msg.get("content", "").split()) for msg in prompt)
                 completion_tokens = len(data["response"].split())
+                total_tokens = prompt_tokens + completion_tokens
+                
+                # Track usage
+                self.total_tokens_used += total_tokens
+                self.requests_made += 1
+                
+                usage = ModelUsage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost=0.0  # Local models have no cost
+                )
                 
                 return ProviderResponse(
                     content=data["response"],
                     model=model,
-                    usage={
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens
-                    },
-                    finish_reason="stop"  # Ollama doesn't provide this info
+                    usage=usage,
+                    finish_reason="stop",  # Ollama doesn't provide this info
+                    raw_response=data
                 )
 
         except Exception as e:
@@ -99,7 +116,10 @@ class OllamaProvider(BaseProvider):
                     if not line:
                         continue
                     try:
-                        data = json.loads(line)
+                        line_str = line.decode('utf-8').strip()
+                        if not line_str:
+                            continue
+                        data = json.loads(line_str)
                         if "response" in data:
                             yield data["response"]
                     except json.JSONDecodeError:
@@ -113,28 +133,41 @@ class OllamaProvider(BaseProvider):
 
     async def generate_with_tools(
         self,
-        prompt: str,
+        prompt: Union[str, List[Dict[str, str]]],
         tools: List[Dict[str, Any]],
         model: Optional[str] = None,
         temperature: float = 0.7,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        extended_thinking: bool = False,
         **kwargs
     ) -> Dict[str, Any]:
-        """Ollama doesn't support native function calling - we implement a basic version."""
+        """Generate a response that may include tool calls."""
         try:
-            # Format tools into prompt
+            model = self.validate_model(model)
+            
+            # Format tools into prompt for Ollama (which doesn't natively support tools)
             tools_description = "Available tools:\n"
             for tool in tools:
-                tools_description += f"- {tool['name']}: {tool['description']}\n"
-                if "parameters" in tool:
-                    tools_description += "  Parameters:\n"
-                    for param in tool["parameters"].get("properties", {}).items():
-                        tools_description += f"    - {param[0]}: {param[1].get('description', '')}\n"
+                if tool["type"] == "function":
+                    func_info = tool["function"]
+                    tools_description += f"- {func_info['name']}: {func_info.get('description', '')}\n"
+                    if "parameters" in func_info and "properties" in func_info["parameters"]:
+                        tools_description += "  Parameters:\n"
+                        for param_name, param_info in func_info["parameters"]["properties"].items():
+                            tools_description += f"    - {param_name}: {param_info.get('description', '')}\n"
 
-            # Create a structured prompt
+            # Format messages or prompt
+            if isinstance(prompt, list):
+                content = self._format_chat_prompt(prompt)
+            else:
+                content = prompt
+
+            # Create structured prompt
             structured_prompt = f"""
 {tools_description}
 
-Respond in the following JSON format if you want to use a tool:
+Respond using the following JSON format if you want to use a tool:
 {{
     "tool_calls": [{{
         "name": "tool_name",
@@ -147,41 +180,98 @@ Respond in the following JSON format if you want to use a tool:
 
 Or respond normally if no tool is needed.
 
-User: {prompt}
+User query: {content}
 Assistant:"""
 
+            # Skip tools if tool_choice is "none"
+            if tool_choice == "none":
+                structured_prompt = content
+
+            # Call generate with the structured prompt
             response = await self.generate(
                 prompt=structured_prompt,
                 model=model,
                 temperature=temperature,
+                max_tokens=max_tokens,
                 **kwargs
             )
 
             # Try to parse response as JSON for tool calls
+            tool_calls = []
+            content = response.content
             try:
-                tool_data = json.loads(response.content)
-                if "tool_calls" in tool_data:
-                    return {
-                        "content": None,
-                        "tool_calls": tool_data["tool_calls"],
-                        "model": response.model,
-                        "usage": response.usage
-                    }
-            except json.JSONDecodeError:
-                # Not JSON, treat as regular response
+                parsed_content = json.loads(response.content)
+                if "tool_calls" in parsed_content:
+                    tool_calls = []
+                    for idx, tool_call in enumerate(parsed_content["tool_calls"]):
+                        tool_calls.append({
+                            "id": f"call_{idx}",
+                            "type": "function",
+                            "function": {
+                                "name": tool_call["name"],
+                                "arguments": json.dumps(tool_call["parameters"])
+                            }
+                        })
+                    # If we successfully parsed tool calls, set content to None
+                    content = None
+            except (json.JSONDecodeError, KeyError, TypeError):
+                # Not JSON or doesn't have expected structure, treat as regular response
                 pass
 
             return {
-                "content": response.content,
-                "tool_calls": None,
-                "model": response.model,
-                "usage": response.usage
+                "content": content,
+                "tool_calls": tool_calls,
+                "model": model,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "cost": 0.0  # Local models have no cost
+                }
             }
 
         except Exception as e:
             logger.error(f"Ollama tool generation error: {str(e)}")
             raise
 
+    def _format_chat_prompt(self, messages: List[Dict[str, str]]) -> str:
+        """Format chat messages for Ollama."""
+        formatted = []
+        
+        # Group messages by role for better formatting
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            
+            if role == "system":
+                formatted.append(f"<system>\n{content}\n</system>")
+            elif role == "user":
+                formatted.append(f"<human>\n{content}\n</human>")
+            elif role == "assistant":
+                formatted.append(f"<assistant>\n{content}\n</assistant>")
+            elif role == "tool":
+                formatted.append(f"<tool>\n{content}\n</tool>")
+        
+        return "\n".join(formatted)
+
     def supports_tools(self) -> bool:
         """Ollama has basic tool support through our implementation."""
         return True
+
+    def get_capabilities(self) -> Dict[str, Any]:
+        """Get provider capabilities and limitations."""
+        return {
+            **super().get_capabilities(),
+            "max_tokens": 4096,  # Conservative default
+            "supports_vision": False,  # Most local models don't support vision yet
+            "supports_embeddings": True,
+            "cost_per_1k": {model: 0.0 for model in self.models}  # Local models are free
+        }
+
+    def get_usage_stats(self) -> Dict[str, Any]:
+        """Get usage statistics."""
+        return {
+            "total_tokens": self.total_tokens_used,
+            "total_requests": self.requests_made,
+            "estimated_cost": 0.0  # Local models have no cost
+        }

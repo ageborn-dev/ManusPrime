@@ -205,18 +205,23 @@ class ManusPrime(Manus):
         
         # Determine task type
         if any(word in combined_text for word in ["code", "program", "function", "script", "python"]):
-            # Use DeepSeek model for coding tasks
-            logger.info("Identified coding task - using deepseek-chat")
-            return "deepseek-chat"
+            # Use model for coding tasks
+            logger.info("Identified coding task - using code_generation model")
+            return config.task_models.code_generation
             
         elif any(word in combined_text for word in ["plan", "organize", "strategy", "workflow", "complex"]):
-            # Use GPT-4o for complex reasoning or planning
-            logger.info("Identified complex reasoning/planning task - using gpt-4o")
-            return "gpt-4o"
+            # Use model for complex reasoning or planning
+            logger.info("Identified complex reasoning/planning task - using planning model")
+            return config.task_models.planning
             
-        # Default to more efficient model for general tasks
-        logger.info("Using default efficient model gpt-4o-mini for general task")
-        return "gpt-4o-mini"
+        elif any(word in combined_text for word in ["zapier", "automation", "webhook", "integrate", "trigger"]):
+            # Use model for tool/API integration tasks
+            logger.info("Identified integration/API task - using tool_use model")
+            return config.task_models.tool_use
+            
+        # Default to model for general tasks
+        logger.info("Using default model for general task")
+        return config.task_models.default
     
     def is_stuck(self) -> bool:
         """Enhanced stuck detection with model switching."""
