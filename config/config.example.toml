@@ -1,53 +1,163 @@
-# Global LLM configuration
-[llm]
-model = "gpt-4o-mini"
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."
-max_tokens = 4096
-temperature = 0.7
-api_type = "openai"
+# Provider Configuration
+[providers]
+default_provider = "anthropic"  # Default to latest Claude 3.7 Sonnet
+enable_local_models = true   # Enable local model support
 
-# OpenAI Models configuration
-[llm.openai]
-model = "gpt-4o-mini"  # Default model for OpenAI
-base_url = "https://api.openai.com/v1"
-api_key = "sk-..."  # Set this in environment variable OPENAI_API_KEY for security
-max_tokens = 4096
-temperature = 0.7
+# Anthropic Provider Configuration
+[providers.anthropic]
+type = "cloud"
+base_url = "https://api.anthropic.com/v1"
+api_key = "sk-..."  # Set in environment: ANTHROPIC_API_KEY
+models = [
+    "claude-3.7-sonnet",    # Latest with extended thinking (64K)
+    "claude-3.5-haiku"      # Fast model
+]
+timeout = 30
+max_retries = 3
+capabilities = {
+    "vision": true,
+    "extended_thinking": true,
+    "multimodal": true,
+    "beta_features": ["output-128k-2025-02-19"]
+}
 
-# DeepSeek Models configuration (OpenAI compatible)
-[llm.deepseek]
-model = "deepseek-chat"  # Default model for DeepSeek
-base_url = "https://api.deepseek.com/v1"  
-api_key = ""  # Set this in environment variable DEEPSEEK_API_KEY for security
-max_tokens = 4096
-temperature = 0.7
+# Mistral Provider Configuration
+[providers.mistral]
+type = "cloud"
+base_url = "https://api.mistral.ai/v1"
+api_key = ""  # Set in environment: MISTRAL_API_KEY
+models = [
+    "mistral-large-latest",    # 131K context
+    "pixtral-large-latest",    # 131K context with vision
+    "codestral-latest",        # 256K context for coding
+    "mistral-saba-latest",     # 32K for Middle East languages
+    "mistral-small-latest",    # 32K cost-effective
+    "pixtral-12b-2409"        # Free vision model
+]
+timeout = 30
+max_retries = 3
+capabilities = {
+    "vision": true,
+    "extended_context": true,
+    "multilingual": true
+}
 
-# Resource monitoring and cost management configuration
+# DeepSeek Provider Configuration
+[providers.deepseek]
+type = "cloud"
+base_url = "https://api.deepseek.com/v1"
+api_key = ""  # Set in environment: DEEPSEEK_API_KEY
+models = [
+    "deepseek-chat",
+    "deepseek-reasoner"
+]
+timeout = 30
+max_retries = 3
+capabilities = {
+    "context_caching": true,
+    "chain_of_thought": true,
+    "time_based_pricing": {
+        "standard_time": "UTC 00:30-16:30",
+        "discount_time": "UTC 16:30-00:30"
+    }
+}
+
+# Gemini Provider Configuration
+[providers.gemini]
+type = "cloud"
+base_url = "https://generativelanguage.googleapis.com/v1"
+api_key = ""  # Set in environment: GEMINI_API_KEY
+models = [
+    "gemini-2.0-flash",      # 1M input, 128K output (beta)
+    "gemini-2.0-flash-lite", # Cost-effective
+    "gemini-1.5-pro"         # High capability
+]
+timeout = 30
+max_retries = 3
+capabilities = {
+    "vision": true,
+    "multimodal_live": true,
+    "native_tool_use": true,
+    "extended_context": true
+}
+
+# Ollama Local Provider Configuration
+[providers.ollama]
+type = "local"
+base_url = "http://localhost:11434"
+models = [
+    "llama2",
+    "codellama",
+    "mistral"
+]
+timeout = 60
+max_retries = 2
+
+# Task-specific Model Configuration
+[task_models]
+code_generation = "codestral-latest"  # Use Codestral for code
+planning = "claude-3.7-sonnet"       # Use Claude 3.7 for planning
+tool_use = "claude-3.7-sonnet"      # Use Claude 3.7 for tools
+default = "mistral-small-latest"    # Default cost-effective model
+
+# Zapier Integration Configuration
+[zapier]
+enabled = false
+webhook_secret = ""  # Set in environment: ZAPIER_WEBHOOK_SECRET
+api_key = ""        # Set in environment: ZAPIER_API_KEY
+allowed_actions = [
+    "task_create",
+    "task_update",
+    "tool_execute"
+]
+max_retries = 3
+timeout = 30
+
+# Resource Monitoring Configuration
 [monitoring]
-# Budget limit in dollars (set to 0 for no limit)
-budget_limit = 5.0
-
-# Whether to enable model switching when budget is exceeded
+budget_limit = 10.0
 enable_budget_alerts = true
 
-# Cost per 1k tokens for each model (prompt + completion)
+# Cost per 1k tokens for each model (input/output)
 [monitoring.costs]
-"gpt-4o" = 0.015
-"gpt-4o-mini" = 0.005
-"deepseek-chat" = 0.003
-"deepseek-r1" = 0.007
+# Anthropic models
+"claude-3.7-sonnet" = { input = 0.015, output = 0.075 }
+"claude-3.5-haiku" = { input = 0.003, output = 0.015 }
 
-# Caching configuration
+# Mistral models
+"mistral-large-latest" = { input = 0.008, output = 0.024 }
+"pixtral-large-latest" = { input = 0.008, output = 0.024 }
+"codestral-latest" = { input = 0.008, output = 0.024 }
+"mistral-saba-latest" = { input = 0.008, output = 0.024 }
+"ministral-8b-latest" = { input = 0.004, output = 0.012 }
+"mistral-small-latest" = { input = 0.002, output = 0.006 }
+
+# Gemini models
+"gemini-2.0-flash" = { input = 0.007, output = 0.014 }
+"gemini-2.0-flash-lite" = { input = 0.003, output = 0.006 }
+"gemini-1.5-pro" = { input = 0.005, output = 0.010 }
+
+# DeepSeek models (standard pricing UTC 00:30-16:30)
+"deepseek-chat" = { 
+    input_cache_hit = 0.07,
+    input_cache_miss = 0.27,
+    output = 1.10
+}
+"deepseek-reasoner" = {
+    input_cache_hit = 0.14,
+    input_cache_miss = 0.55,
+    output = 2.19
+}
+
+# Local models
+"llama2" = 0.0
+"codellama" = 0.0
+"mistral" = 0.0
+
+# Cache Configuration
 [cache]
-# Enable or disable content caching
 enable = true
-
-# Time in seconds before cached content expires (default: 24 hours)
-expiration_time = 86400
-
-# Maximum number of items to store in cache
+expiration_time = 86400  # 24 hours
 max_cache_size = 100
-
-# Cache directory (relative to project root)
 cache_dir = "cache"
+context_caching = true   # Enable context caching for supported providers
