@@ -239,6 +239,61 @@ function displayResourceUsage(data) {
 }
 
 /**
+ * Delete a task
+ */
+function deleteTask(taskId, event) {
+    // Prevent the click from bubbling up to the task item
+    event.stopPropagation();
+    
+    // Confirm deletion
+    if (!confirm('Are you sure you want to delete this task?')) {
+        return;
+    }
+    
+    // Show loading state
+    const taskItem = document.querySelector(`.task-item[data-task-id="${taskId}"]`);
+    if (taskItem) {
+        taskItem.classList.add('deleting');
+    }
+    
+    // Send delete request
+    fetch(`/api/tasks/${taskId}`, {
+        method: 'DELETE'
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('Failed to delete task');
+        }
+        
+        // Remove from task list
+        if (taskItem) {
+            taskItem.remove();
+        }
+        
+        // If this was the active task, clear the task container
+        if (taskId === activeTaskId) {
+            activeTaskId = null;
+            const taskContainer = document.getElementById('task-container');
+            taskContainer.innerHTML = `
+                <div class="welcome">
+                    <h2>Welcome to ManusPrime</h2>
+                    <p>The intelligent multi-model AI agent that selects the optimal model for each task.</p>
+                    <p>Enter your task below to get started.</p>
+                </div>
+            `;
+        }
+        
+        showNotification('Task deleted successfully', 'success');
+    })
+    .catch(error => {
+        if (taskItem) {
+            taskItem.classList.remove('deleting');
+        }
+        showNotification(`Error: ${error.message}`, 'error');
+    });
+}
+
+/**
  * Display an error message
  */
 function displayError(message) {
@@ -309,9 +364,17 @@ function loadTaskHistory() {
                         </span>
                     </div>
                     <div class="task-prompt">${sanitizeHTML(task.prompt)}</div>
+                    <div class="task-actions">
+                        <button class="delete-task-btn" title="Delete task">🗑️</button>
+                    </div>
                 `;
                 
                 taskItem.addEventListener('click', () => loadTask(task.id));
+                
+                // Add event listener to delete button
+                const deleteBtn = taskItem.querySelector('.delete-task-btn');
+                deleteBtn.addEventListener('click', (e) => deleteTask(task.id, e));
+                
                 taskList.appendChild(taskItem);
             });
         })

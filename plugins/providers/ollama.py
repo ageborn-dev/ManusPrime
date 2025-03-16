@@ -6,7 +6,7 @@ import asyncio
 from typing import Dict, List, Optional, Any, ClassVar
 
 from plugins.base import Plugin, PluginCategory, ProviderPlugin
-from manusprime.config import config
+from config import config
 
 logger = logging.getLogger("manusprime.plugins.ollama")
 

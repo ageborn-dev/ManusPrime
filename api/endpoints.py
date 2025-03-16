@@ -159,6 +159,32 @@ async def get_task_events(task_id: str, db: Session = Depends(get_db)):
         }
     )
 
+@router.delete("/tasks/{task_id}")
+async def delete_task(
+    task_id: str,
+    db: Session = Depends(get_db)
+):
+    """Delete a task by ID.
+    
+    Args:
+        task_id: Task ID
+        db: Database session
+        
+    Returns:
+        dict: Success message
+    """
+    # Verify task exists
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Delete task
+    success = crud.delete_task(db, task_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to delete task")
+    
+    return {"message": "Task deleted successfully"}
+
 # Background task function
 async def run_task(task_id: str, prompt: str):
     """Run a task in the background.

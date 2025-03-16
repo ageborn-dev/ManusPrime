@@ -166,3 +166,27 @@ def update_resource_usage(
     db.commit()
     db.refresh(db_usage)
     return db_usage
+
+def delete_task(db: Session, task_id: str) -> bool:
+    """Delete a task by ID.
+    
+    Args:
+        db: Database session
+        task_id: Task ID
+        
+    Returns:
+        bool: True if deletion was successful
+    """
+    db_task = get_task(db, task_id)
+    if not db_task:
+        return False
+        
+    try:
+
+        db.delete(db_task)
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting task {task_id}: {e}")
+        return False

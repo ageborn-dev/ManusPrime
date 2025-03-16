@@ -229,7 +229,9 @@ class PluginRegistry:
     
     async def cleanup_all(self) -> None:
         """Clean up all active plugins."""
-        for plugin in self.plugin_instances.values():
+        plugins_to_cleanup = list(self.plugin_instances.values())
+        
+        for plugin in plugins_to_cleanup:
             try:
                 await plugin.cleanup()
             except Exception as e:

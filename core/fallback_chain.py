@@ -3,6 +3,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from config import config
 
 logger = logging.getLogger("manusprime.fallback")
 
@@ -66,7 +67,7 @@ class FallbackChain:
     
     def _calculate_backoff(self, error_count: int) -> float:
         """Calculate exponential backoff time in seconds."""
-        return min(300, 2 ** error_count)  # Max 5 minutes
+        return min(300, 2 ** error_count)
     
     def _update_metrics(self, 
                        model: str, 
@@ -100,7 +101,7 @@ class FallbackChain:
                 return True, "backoff"
         
         # Check success rate
-        if self.success_rates[model.name] < 0.5:  # Less than 50% success
+        if self.success_rates[model.name] < 0.5:
             return True, "low_success_rate"
         
         # Check error threshold

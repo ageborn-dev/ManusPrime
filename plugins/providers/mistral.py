@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Any, ClassVar
 # Update imports to match new SDK structure
 from mistralai import Mistral as MistralAsyncClient
 from plugins.base import Plugin, PluginCategory, ProviderPlugin, BaseProvider
-from manusprime.config import config
+from config import config
 
 logger = logging.getLogger("manusprime.plugins.mistral")
  

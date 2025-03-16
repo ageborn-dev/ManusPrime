@@ -219,6 +219,78 @@ body {
     background-color: var(--primary-dark);
 }
 
+/* Task actions */
+.task-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+}
+
+.delete-task-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s ease-in-out;
+    padding: 0.25rem;
+    border-radius: 0.25rem;
+}
+
+.delete-task-btn:hover {
+    opacity: 1;
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Style for task item that's being deleted */
+.task-item.deleting {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+/* Style for active task item */
+.task-item.active {
+    border-left: 3px solid var(--primary-color);
+}
+
+/* Add this to your notification styles if not already present */
+.notification-success {
+    background-color: var(--success-color);
+    color: white;
+}
+
+/* Animation for notifications */
+.notification {
+    margin-bottom: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    animation: slide-in 0.3s ease-out;
+}
+
+.notification.fade-out {
+    animation: fade-out 0.3s ease-in forwards;
+}
+
+@keyframes slide-in {
+    from { transform: translateY(-20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+}
+
+#notification-container {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
 /* Message styles */
 .message {
     max-width: 800px;

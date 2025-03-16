@@ -10,7 +10,7 @@ import json
 # Updated imports for the new Gemini SDK
 from google import genai
 from plugins.base import BaseProvider, PluginCategory
-from config import config as app_config  # Renamed to avoid conflicts
+from config import config as app_config
 from utils.logger import logger
 from utils.monitor import resource_monitor
 
