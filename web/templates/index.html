@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ManusPrime</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>ManusPrime</h1>
+                <p>Multi-model AI Assistant</p>
+            </div>
+            <div class="task-history">
+                <h2>Task History</h2>
+                <div id="task-list" class="task-list">
+                    <div class="loading">Loading history...</div>
+                </div>
+            </div>
+        </div>
+        <div class="main">
+            <div id="task-container" class="task-container">
+                <div class="welcome">
+                    <h2>Welcome to ManusPrime</h2>
+                    <p>The intelligent multi-model AI agent that selects the optimal model for each task.</p>
+                    <p>Enter your task below to get started.</p>
+                </div>
+            </div>
+            <div class="input-container">
+                <textarea id="prompt-input" placeholder="Enter your task or question..."></textarea>
+                <button id="submit-button" onclick="createTask()">Send</button>
+            </div>
+        </div>
+    </div>
+    <script src="/static/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,126 @@
+# ManusPrime .gitignore file
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Environment Variables and Secrets
+.env
+.env.*
+!.env.example
+
+# Configuration Files
+config/default.toml
+config/local.toml
+config/production.toml
+!config/default.example.toml
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Cache directories
+.cache/
+cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+
+# Data directories
+data/
+!data/.gitkeep
+data/vector_memory/
+data/browser_profiles/
+
+# Plugin-specific
+screenshots/
+workspace/
+outputs/
+
+# Operating System
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+
+# Temporary files
+tmp/
+temp/
+.temp/
+
+# Generated content
+generated/
+
+# Node for web interface (if applicable)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Pytest
+.pytest_cache/
+pytest-report.xml
+
+# Coverage reports
+coverage.xml
+.coverage
+htmlcov/
+
+# Built documentation
+docs/_build/
+docs/api/

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
+  <!-- Background gradient -->
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2d3a80" />
+      <stop offset="100%" stop-color="#1a237e" />
+    </linearGradient>
+    <linearGradient id="highlightGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#5c6bc0" />
+      <stop offset="100%" stop-color="#3949ab" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Main hexagon shape -->
+  <polygon points="250,50 425,150 425,350 250,450 75,350 75,150" fill="url(#bgGradient)" />
+  
+  <!-- Central icon -->
+  <g transform="translate(250, 250) scale(0.8)">
+    <!-- Robot/AI head outline -->
+    <path d="M0,-100 C55,-100 100,-55 100,0 C100,55 55,100 0,100 C-55,100 -100,55 -100,0 C-100,-55 -55,-100 0,-100 Z" 
+          fill="none" stroke="#ffffff" stroke-width="12" />
+    
+    <!-- Digital circuit patterns -->
+    <path d="M-60,-30 L60,-30 M-60,0 L60,0 M-60,30 L60,30" 
+          stroke="#64b5f6" stroke-width="8" stroke-linecap="round" />
+    
+    <path d="M-30,-60 L-30,60 M0,-60 L0,60 M30,-60 L30,60" 
+          stroke="#64b5f6" stroke-width="8" stroke-linecap="round" />
+    
+    <!-- Node points at intersections -->
+    <circle cx="-30" cy="-30" r="12" fill="#ffffff" />
+    <circle cx="0" cy="-30" r="12" fill="#ffffff" />
+    <circle cx="30" cy="-30" r="12" fill="#ffffff" />
+    
+    <circle cx="-30" cy="0" r="12" fill="#ffffff" />
+    <circle cx="0" cy="0" r="18" fill="#ffffff" />
+    <circle cx="30" cy="0" r="12" fill="#ffffff" />
+    
+    <circle cx="-30" cy="30" r="12" fill="#ffffff" />
+    <circle cx="0" cy="30" r="12" fill="#ffffff" />
+    <circle cx="30" cy="30" r="12" fill="#ffffff" />
+  </g>
+  
+  <!-- Orbital rings representing multiple models -->
+  <g fill="none" stroke="#81d4fa" stroke-width="3" opacity="0.8">
+    <ellipse cx="250" cy="250" rx="180" ry="120" transform="rotate(15, 250, 250)" />
+    <ellipse cx="250" cy="250" rx="190" ry="130" transform="rotate(75, 250, 250)" />
+    <ellipse cx="250" cy="250" rx="170" ry="110" transform="rotate(135, 250, 250)" />
+  </g>
+  
+  <!-- Decorative elements -->
+  <g>
+    <!-- Connecting lines to show network -->
+    <path d="M120,180 L200,220 M300,220 L380,180 M120,320 L200,280 M300,280 L380,320" 
+          stroke="#81d4fa" stroke-width="4" stroke-dasharray="6,8" />
+    
+    <!-- Corner accent shapes -->
+    <polygon points="85,160 115,160 115,190" fill="url(#highlightGradient)" />
+    <polygon points="415,160 385,160 385,190" fill="url(#highlightGradient)" />
+    <polygon points="85,340 115,340 115,310" fill="url(#highlightGradient)" />
+    <polygon points="415,340 385,340 385,310" fill="url(#highlightGradient)" />
+  </g>
+</svg>

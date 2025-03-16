@@ -1,0 +1,28 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.4.2
+jinja2==3.1.2
+aiofiles==23.2.1
+python-multipart==0.0.6
+starlette==0.27.0
+sqlalchemy==2.0.23
+aiosqlite==0.19.0
+anthropic==0.7.4       # For Claude models
+openai==1.3.7          # For GPT models
+mistralai==0.0.8       # For Mistral models
+google-generativeai>=0.3.2  # For Gemini models
+google-ai-generativelanguage>=0.4.0  # Additional Gemini types
+googlesearch-python==1.2.3  # For search plugin
+aiohttp==3.8.6              # For HTTP requests
+browser-use==0.1.0          # For browser automation (optional)
+python-dotenv==1.0.0        # For environment variables
+tomli==2.0.1                # For TOML config files
+tenacity==8.2.3             # For retries
+httpx==0.25.1               # For async HTTP clients
+asyncio==3.4.3              # For async functionality
+faiss-cpu>=1.7.4        # Vector similarity search
+sentence-transformers>=2.2.2  # Text embeddings
+crawl4ai>=0.5.0              # Web crawling and scraping (optional)
+# Optional dependencies
+pytest==7.4.3
+pytest-asyncio==0.21.1
