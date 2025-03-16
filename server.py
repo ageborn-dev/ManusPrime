@@ -1,22 +1,41 @@
 # server.py
 import uvicorn
-import asyncio
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
-
+from contextlib import asynccontextmanager
 from api.routes import router as api_router
 from db.session import create_tables
 from utils.logger import logger
 from core.plugin_manager import plugin_manager
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Load configuration
+    logger.info("Configuration loaded")
+    
+    # Create database tables
+    create_tables()
+    
+    # Initialize plugin manager
+    await plugin_manager.initialize()
+    
+    logger.info("ManusPrime server started")
+    
+    yield
+    
+    # Cleanup plugins
+    await plugin_manager.cleanup()
+    
+    logger.info("ManusPrime server shutting down")
+
 # Create FastAPI app
 app = FastAPI(
     title="ManusPrime",
     description="Multi-model AI agent API",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 # Add CORS middleware
@@ -42,25 +61,6 @@ async def index(request: Request):
 # Include API routes
 app.include_router(api_router)
 
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    # Create database tables
-    create_tables()
-    
-    # Initialize plugin manager
-    await plugin_manager.initialize()
-    
-    logger.info("ManusPrime server started")
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Cleanup plugins
-    await plugin_manager.cleanup()
-    
-    logger.info("ManusPrime server shutting down")
-
 # Run server
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="localhost", port=8000)

@@ -41,9 +41,34 @@ class InputValidatorPlugin(Plugin):
             r"you are now",
             r"all of your instructions"
         ]
+    
+    async def initialize(self) -> bool:
+        """Initialize the plugin with necessary setup.
         
-        # Initialized state
-        self.initialized = True
+        Returns:
+            bool: True if initialization was successful, False otherwise
+        """
+        logger.info("Initializing InputValidatorPlugin")
+        
+        try:
+            # Add any necessary initialization logic here
+            # For now, we'll just do a basic check of our configuration
+            
+            if "max_length" in self.config and not isinstance(self.config["max_length"], int):
+                logger.error("Configuration error: max_length must be an integer")
+                return False
+                
+            if "min_length" in self.config and not isinstance(self.config["min_length"], int):
+                logger.error("Configuration error: min_length must be an integer")
+                return False
+            
+            # We'll consider the plugin initialized successfully
+            logger.info("InputValidatorPlugin initialized successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing InputValidatorPlugin: {str(e)}")
+            return False
     
     async def execute(
         self, 

@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Any, ClassVar
 
 from openai import AsyncOpenAI
 from plugins.base import Plugin, PluginCategory, ProviderPlugin
-from config import config
+from manusprime.config import config
 
 logger = logging.getLogger("manusprime.plugins.openai")
 

@@ -35,6 +35,9 @@ class PluginRegistry:
             # Set of loaded module paths to prevent duplicate loading
             self.loaded_modules: Set[str] = set()
             
+            # Set to track class paths to prevent duplicate registration
+            self.registered_class_paths: Set[str] = set()
+            
             self._initialized = True
     
     def register_plugin_class(self, plugin_class: Type[Plugin]) -> bool:
@@ -58,11 +61,30 @@ class PluginRegistry:
             logger.error(f"Cannot register plugin {plugin_class.name}: Missing category attribute")
             return False
         
+        # Skip registering the base Plugin class and its direct abstract subclasses
+        if plugin_class.__name__ == 'Plugin' or (
+            inspect.isabstract(plugin_class) and 
+            Plugin in plugin_class.__bases__ and
+            plugin_class.__module__ == 'plugins.base'
+        ):
+            return False
+        
+        # Create a unique identifier for this class to prevent duplicates
+        class_path = f"{plugin_class.__module__}.{plugin_class.__name__}"
+        if class_path in self.registered_class_paths:
+            # Already registered this exact class, skip
+            return False
+            
         plugin_name = plugin_class.name
         
         if plugin_name in self.plugin_classes:
-            logger.warning(f"Plugin '{plugin_name}' already registered. Will be overwritten.")
+            # Only warn if it's a different class with the same name
+            existing_class_path = f"{self.plugin_classes[plugin_name].__module__}.{self.plugin_classes[plugin_name].__name__}"
+            if existing_class_path != class_path:
+                logger.warning(f"Plugin name '{plugin_name}' already registered by {existing_class_path}. Will be overwritten by {class_path}")
         
+        # Add to tracking sets and dictionaries
+        self.registered_class_paths.add(class_path)
         self.plugin_classes[plugin_name] = plugin_class
         logger.debug(f"Registered plugin class: {plugin_name} ({plugin_class.category.value})")
         
@@ -117,46 +139,55 @@ class PluginRegistry:
             return None
     
     def discover_plugins(self, plugin_dir: str = "plugins") -> int:
-        """Discover plugins from the specified directory.
-        
-        Args:
-            plugin_dir: Directory to search for plugins
-            
-        Returns:
-            int: Number of new plugin classes discovered
-        """
+        """Discover plugins from the specified directory."""
+        import os
+        import sys
+        import importlib.util
+
         plugin_path = Path(plugin_dir)
         if not plugin_path.exists() or not plugin_path.is_dir():
             logger.error(f"Plugin directory not found: {plugin_dir}")
             return 0
         
         initial_count = len(self.plugin_classes)
+        processed_files = set()  # Track processed files to avoid duplicates
         
-        # Recursively walk through plugin directories
-        for _, module_name, is_pkg in pkgutil.walk_packages([str(plugin_path)]):
-            if is_pkg:
-                # Skip for now, we'll get to it in the recursive walk
-                continue
-                
-            module_path = f"{plugin_dir}.{module_name}"
-            
-            if module_path in self.loaded_modules:
-                continue
-                
-            try:
-                module = importlib.import_module(module_path)
-                self.loaded_modules.add(module_path)
-                
-                # Find plugin classes in the module
-                for name, obj in inspect.getmembers(module):
-                    if (inspect.isclass(obj) and 
-                        issubclass(obj, Plugin) and 
-                        obj is not Plugin and
-                        obj.__module__ == module.__name__):
-                        self.register_plugin_class(obj)
+        # Get all Python files recursively in the plugin directory
+        for root, _, files in os.walk(str(plugin_path)):
+            for file in files:
+                if file.endswith('.py') and file != '__init__.py':
+                    # Get the full file path
+                    file_path = os.path.join(root, file)
+                    
+                    # Skip if we've already processed this file
+                    if file_path in processed_files:
+                        continue
+                    processed_files.add(file_path)
+                    
+                    # Convert file path to module path
+                    rel_path = os.path.relpath(file_path, os.path.dirname(plugin_path))
+                    module_name = os.path.splitext(rel_path.replace(os.sep, '.'))[0]
+                    
+                    if module_name in self.loaded_modules:
+                        continue
+                    
+                    try:
+                        # Import the module from file path
+                        spec = importlib.util.spec_from_file_location(module_name, file_path)
+                        module = importlib.util.module_from_spec(spec)
+                        spec.loader.exec_module(module)
+                        self.loaded_modules.add(module_name)
                         
-            except Exception as e:
-                logger.error(f"Error loading plugin module '{module_path}': {str(e)}")
+                        # Find plugin classes in the module
+                        for name, obj in inspect.getmembers(module):
+                            if (inspect.isclass(obj) and 
+                                issubclass(obj, Plugin) and 
+                                obj is not Plugin and
+                                not inspect.isabstract(obj)):
+                                self.register_plugin_class(obj)
+                        
+                    except Exception as e:
+                        logger.warning(f"Error loading module {module_name} from {file_path}: {e}")
         
         new_plugins = len(self.plugin_classes) - initial_count
         logger.info(f"Discovered {new_plugins} new plugin classes from {plugin_dir}")

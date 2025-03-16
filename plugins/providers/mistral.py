@@ -2,13 +2,13 @@
 import logging
 from typing import Dict, List, Optional, Any, ClassVar
 
-from mistralai.client import MistralAsyncClient
-from mistralai.models.chat_completion import ChatMessage
-from plugins.base import Plugin, PluginCategory, ProviderPlugin
-from config import config
+# Update imports to match new SDK structure
+from mistralai import Mistral as MistralAsyncClient
+from plugins.base import Plugin, PluginCategory, ProviderPlugin, BaseProvider
+from manusprime.config import config
 
 logger = logging.getLogger("manusprime.plugins.mistral")
-
+ 
 class MistralProvider(ProviderPlugin):
     """Provider plugin for Mistral AI models."""
     
@@ -52,14 +52,13 @@ class MistralProvider(ProviderPlugin):
         try:
             # Extract config
             self.api_key = self.config.get("api_key", "")
-            endpoint = self.config.get("endpoint", self.endpoint)
             
             if not self.api_key:
                 logger.error("Mistral API key not provided")
                 return False
             
-            # Initialize client
-            self.client = MistralAsyncClient(api_key=self.api_key, endpoint=endpoint)
+            # Initialize client - new SDK doesn't use endpoint parameter in constructor
+            self.client = MistralAsyncClient(api_key=self.api_key)
             logger.info("Mistral provider initialized successfully")
             return True
             
@@ -94,11 +93,11 @@ class MistralProvider(ProviderPlugin):
         model_name = model if model in self.supported_models else self.default_model
         
         try:
-            # Prepare messages format
-            messages = [ChatMessage(role="user", content=prompt)]
+            # Prepare messages format - updated to use dictionaries instead of ChatMessage
+            messages = [{"role": "user", "content": prompt}]
             
-            # Make the API call
-            response = await self.client.chat(
+            # Make the API call with new SDK structure
+            response = await self.client.chat.complete_async(
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
@@ -106,7 +105,7 @@ class MistralProvider(ProviderPlugin):
                 **kwargs
             )
             
-            # Extract content
+            # Extract content from new response structure
             content = response.choices[0].message.content if response.choices else ""
             
             # Calculate cost (per 1K tokens)
@@ -162,8 +161,8 @@ class MistralProvider(ProviderPlugin):
         model_name = model if model in self.supported_models else self.default_model
         
         try:
-            # Prepare messages format
-            messages = [ChatMessage(role="user", content=prompt)]
+            # Prepare messages format - updated to use dictionaries instead of ChatMessage
+            messages = [{"role": "user", "content": prompt}]
             
             # Skip tools if tool_choice is "none"
             mistral_tools = None
@@ -173,10 +172,10 @@ class MistralProvider(ProviderPlugin):
             # Handle tool_choice
             mistral_kwargs = {}
             if tool_choice == "required" and mistral_tools:
-                mistral_kwargs["tool_choice"] = "any"  # Mistral doesn't have exact equivalent to "required"
+                mistral_kwargs["tool_choice"] = "any" 
             
-            # Make the API call
-            response = await self.client.chat(
+            # Make the API call with new SDK structure
+            response = await self.client.chat.complete_async(
                 model=model_name,
                 messages=messages,
                 temperature=temperature,
@@ -184,11 +183,11 @@ class MistralProvider(ProviderPlugin):
                 **{**kwargs, **mistral_kwargs}
             )
             
-            # Extract content
+            # Extract content from new response structure
             message = response.choices[0].message if response.choices else None
             content = message.content if message else ""
             
-            # Extract tool calls
+            # Extract tool calls - adapt to new response structure
             tool_calls = []
             if hasattr(message, "tool_calls") and message.tool_calls:
                 for idx, call in enumerate(message.tool_calls):

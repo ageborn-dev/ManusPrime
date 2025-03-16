@@ -142,3 +142,53 @@ class ProviderPlugin(Plugin):
             float: The cost per 1K tokens
         """
         pass
+
+# Add the missing BaseProvider class
+class BaseProvider(ProviderPlugin):
+    """Base class for provider plugins with common functionality."""
+    
+    name: ClassVar[str] = "base_provider"
+    description: ClassVar[str] = "Base provider plugin class"
+    
+    async def initialize(self) -> bool:
+        """Initialize the provider plugin.
+        
+        Returns:
+            bool: True if initialization was successful
+        """
+        return True
+    
+    async def execute(self, **kwargs) -> Any:
+        """Execute the provider plugin.
+        
+        Args:
+            **kwargs: Keyword arguments for execution
+            
+        Returns:
+            Any: Result of the execution
+        """
+        prompt = kwargs.get("prompt", "")
+        if "tools" in kwargs:
+            return await self.generate_with_tools(prompt, kwargs.get("tools"), **kwargs)
+        else:
+            return await self.generate(prompt, **kwargs)
+    
+    async def generate(self, prompt: str, model: Optional[str] = None, temperature: float = 0.7, 
+                      max_tokens: Optional[int] = None, **kwargs) -> Dict:
+        """Default implementation to be overridden."""
+        raise NotImplementedError("Provider must implement generate method")
+    
+    async def generate_with_tools(self, prompt: str, tools: List[Dict], model: Optional[str] = None,
+                                 temperature: float = 0.7, tool_choice: str = "auto", **kwargs) -> Dict:
+        """Default implementation to be overridden."""
+        raise NotImplementedError("Provider must implement generate_with_tools method")
+    
+    def get_default_model(self) -> str:
+        """Default implementation to be overridden."""
+        if self.supported_models:
+            return self.supported_models[0]
+        raise NotImplementedError("Provider must implement get_default_model method")
+    
+    def get_model_cost(self, model: str) -> float:
+        """Default implementation to be overridden."""
+        raise NotImplementedError("Provider must implement get_model_cost method")

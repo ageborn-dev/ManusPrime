@@ -1,17 +1,16 @@
+# plugins/providers/gemini.py
 import os
 from typing import Dict, List, Optional, Any, Union
 import asyncio
-import google.generativeai as genai
-from google.ai import generativelanguage as glanguage
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import base64
 from datetime import datetime
 import mimetypes
 import json
 
-from core.plugin_manager import plugin_manager
+# Updated imports for the new Gemini SDK
+from google import genai
 from plugins.base import BaseProvider, PluginCategory
-from config import config
+from config import config as app_config  # Renamed to avoid conflicts
 from utils.logger import logger
 from utils.monitor import resource_monitor
 
@@ -32,15 +31,7 @@ class GeminiProvider(BaseProvider):
         self.initialized = False
         
         # Initialize Gemini client
-        genai.configure(api_key=self.api_key)
-        
-        # Set default safety settings
-        self.safety_settings = {
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        }
+        self.client = genai.Client(api_key=self.api_key)
         
     async def initialize(self) -> bool:
         """Initialize the provider."""
@@ -53,9 +44,10 @@ class GeminiProvider(BaseProvider):
                 raise ValueError("GEMINI_API_KEY environment variable not set")
                 
             # Test connection
-            model = genai.GenerativeModel("gemini-2.0-flash-lite")
-            response = await self._run_with_retry(
-                lambda: model.generate_content("Test connection")
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model="gemini-2.0-flash-lite",
+                contents="Test connection"
             )
             
             self.initialized = True
@@ -80,12 +72,12 @@ class GeminiProvider(BaseProvider):
                 "data": base64.b64encode(img_file.read()).decode()
             }
             
-    async def _run_with_retry(self, func, max_retries: int = 3):
+    async def _run_with_retry(self, func, *args, max_retries: int = 3, **kwargs):
         """Execute function with retries."""
         last_error = None
         for attempt in range(max_retries):
             try:
-                return await asyncio.to_thread(func)
+                return await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
                 last_error = e
                 if attempt < max_retries - 1:
@@ -119,42 +111,47 @@ class GeminiProvider(BaseProvider):
             # Get model configuration
             model_config = self._get_model_config(model)
             
-            # Initialize model
-            genai_model = genai.GenerativeModel(
-                model_name=model,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_tokens or model_config.get("output_tokens", 8192),
-                    "top_p": kwargs.get("top_p", 0.95),
-                    "top_k": kwargs.get("top_k", 40),
-                }
-            )
+            # Create generation config
+            config = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens or model_config.get("output_tokens", 8192),
+                "top_p": kwargs.get("top_p", 0.95),
+                "top_k": kwargs.get("top_k", 40),
+            }
             
             # Create content
             content = kwargs.get("content", prompt)
             
             # Handle multimodal input if provided
             if "images" in kwargs and model_config.get("multimodal"):
-                parts = [content]
+                contents = [content]
                 for image_path in kwargs["images"]:
-                    parts.append(self._encode_image(image_path))
+                    # For the new SDK, we'll need to open the image file instead of encoding
+                    contents.append(open(image_path, "rb"))
+                
                 response = await self._run_with_retry(
-                    lambda: genai_model.generate_content(parts)
+                    self.client.models.generate_content,
+                    model=model,
+                    contents=contents,
+                    config=config
                 )
             else:
                 response = await self._run_with_retry(
-                    lambda: genai_model.generate_content(content)
+                    self.client.models.generate_content,
+                    model=model,
+                    contents=content,
+                    config=config
                 )
             
-            # Calculate token usage
+            # Extract usage information from response
             usage = {
-                "prompt_tokens": response.prompt_token_count,
-                "completion_tokens": response.candidates[0].token_count,
-                "total_tokens": response.prompt_token_count + response.candidates[0].token_count
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                "total_tokens": getattr(response.usage, "total_tokens", 0)
             }
             
             # Calculate cost
-            cost_per_1k = config.get_value(f"costs.{model}", 0.0)
+            cost_per_1k = app_config.get_value(f"costs.{model}", 0.0)
             cost = (usage["total_tokens"] / 1000) * cost_per_1k
             
             return {
@@ -165,7 +162,7 @@ class GeminiProvider(BaseProvider):
                     "cost": cost
                 },
                 "model": model,
-                "finish_reason": response.candidates[0].finish_reason.name,
+                "finish_reason": getattr(response.candidates[0] if response.candidates else None, "finish_reason", ""),
                 "execution_time": (datetime.now() - start_time).total_seconds()
             }
             
@@ -194,60 +191,64 @@ class GeminiProvider(BaseProvider):
             if not model_config.get("function_calling"):
                 raise ValueError(f"Model {model} does not support function calling")
                 
-            # Initialize model
-            genai_model = genai.GenerativeModel(
-                model_name=model,
-                generation_config={
-                    "temperature": temperature,
-                    "max_output_tokens": kwargs.get("max_tokens", model_config["output_tokens"]),
-                    "top_p": kwargs.get("top_p", 0.95),
-                    "top_k": kwargs.get("top_k", 40),
-                }
-            )
+            # Create generation config with tools
+            config = {
+                "temperature": temperature,
+                "max_output_tokens": kwargs.get("max_tokens", model_config.get("output_tokens", 8192)),
+                "top_p": kwargs.get("top_p", 0.95),
+                "top_k": kwargs.get("top_k", 40),
+                "tools": self._prepare_function_declarations(tools)
+            }
             
-            # Prepare function declarations
-            declarations = self._prepare_function_declarations(tools)
-            
-            # Create chat session with tools
-            chat = genai_model.start_chat(tools=declarations)
+            # Set tool choice settings
+            if tool_choice == "none":
+                config["automatic_function_calling"] = {"disable": True}
+            elif tool_choice == "required":
+                config["automatic_function_calling"] = {"required": True}
             
             # Generate response
             response = await self._run_with_retry(
-                lambda: chat.send_message(prompt)
+                self.client.models.generate_content,
+                model=model,
+                contents=prompt,
+                config=config
             )
             
             # Extract tool calls if any
             tool_calls = []
-            if hasattr(response, "tool_calls") and response.tool_calls:
-                for call in response.tool_calls:
-                    tool_calls.append({
-                        "type": "function",
-                        "function": {
-                            "name": call.function.name,
-                            "arguments": json.loads(call.function.args)
-                        }
-                    })
+            if hasattr(response, "candidates") and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, "content") and hasattr(candidate.content, "parts"):
+                    for part in candidate.content.parts:
+                        if hasattr(part, "function_call") and part.function_call:
+                            tool_calls.append({
+                                "type": "function",
+                                "function": {
+                                    "name": part.function_call.name,
+                                    "arguments": json.loads(part.function_call.args)
+                                }
+                            })
             
             # Calculate usage and cost
             usage = {
-                "prompt_tokens": response.prompt_token_count,
-                "completion_tokens": response.candidates[0].token_count,
-                "total_tokens": response.prompt_token_count + response.candidates[0].token_count
+                "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
+                "completion_tokens": getattr(response.usage, "completion_tokens", 0),
+                "total_tokens": getattr(response.usage, "total_tokens", 0)
             }
             
-            cost_per_1k = config.get_value(f"costs.{model}", 0.0)
+            cost_per_1k = app_config.get_value(f"costs.{model}", 0.0)
             cost = (usage["total_tokens"] / 1000) * cost_per_1k
             
             return {
                 "success": True,
-                "content": response.text,
+                "content": response.text if not tool_calls else None,
                 "tool_calls": tool_calls,
                 "usage": {
                     **usage,
                     "cost": cost
                 },
                 "model": model,
-                "finish_reason": response.candidates[0].finish_reason.name,
+                "finish_reason": getattr(response.candidates[0] if response.candidates else None, "finish_reason", ""),
                 "execution_time": (datetime.now() - start_time).total_seconds()
             }
             
@@ -263,6 +264,3 @@ class GeminiProvider(BaseProvider):
     async def cleanup(self):
         """Clean up resources."""
         self.initialized = False
-
-# Register the provider
-plugin_manager.register_plugin("gemini", GeminiProvider)
