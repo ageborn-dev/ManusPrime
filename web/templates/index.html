@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ManusPrime</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .new-task-button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            width: 100%;
+        }
+        .new-task-button:hover {
+            background-color: #45a049;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -12,6 +28,7 @@
             <div class="sidebar-header">
                 <h1>ManusPrime</h1>
                 <p>Multi-model AI Assistant</p>
+                <button id="new-task-button" class="new-task-button">New Task</button>
             </div>
             <div class="task-history">
                 <h2>Task History</h2>

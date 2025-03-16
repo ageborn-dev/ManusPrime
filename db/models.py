@@ -1,5 +1,5 @@
 # db/models.py
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -17,6 +17,8 @@ class Task(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sandbox_session_id = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
     
     # Relationships
     results = relationship("TaskResult", back_populates="task", cascade="all, delete-orphan")
@@ -30,7 +32,9 @@ class Task(Base):
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "sandbox_session_id": self.sandbox_session_id,
+            "is_active": self.is_active
         }
 
 

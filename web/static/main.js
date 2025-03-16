@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Set up event listeners
     const promptInput = document.getElementById('prompt-input');
     const submitButton = document.getElementById('submit-button');
+    const newTaskButton = document.getElementById('new-task-button');
     
     // Submit on enter (but allow shift+enter for newlines)
     promptInput.addEventListener('keydown', (e) => {
@@ -18,13 +19,57 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Submit on button click
     submitButton.addEventListener('click', createTask);
+
+    // New task button handler
+    newTaskButton.addEventListener('click', startNewTask);
     
     // Load task history
     loadTaskHistory();
 });
 
 /**
- * Create a new task
+ * Handle starting a new task
+ */
+async function startNewTask() {
+    // Check for active task
+    if (activeTaskId) {
+        if (!confirm('Starting a new task will close the current task. Continue?')) {
+            return;
+        }
+        
+        try {
+            // Save current task state
+            await fetch(`/api/tasks/${activeTaskId}/save`, {
+                method: 'POST'
+            });
+            
+            // Cleanup if there's an active sandbox session
+            await fetch(`/api/tasks/${activeTaskId}/cleanup`, {
+                method: 'POST'
+            });
+        } catch (error) {
+            console.error('Error cleaning up task:', error);
+            showNotification('Error cleaning up task: ' + error.message, 'error');
+        }
+    }
+    
+    // Reset UI state
+    document.getElementById('task-container').innerHTML = `
+        <div class="welcome">
+            <h2>Welcome to ManusPrime</h2>
+            <p>The intelligent multi-model AI agent that selects the optimal model for each task.</p>
+            <p>Enter your task below to get started.</p>
+        </div>
+    `;
+    document.getElementById('prompt-input').value = '';
+    activeTaskId = null;
+    
+    // Refresh task history
+    loadTaskHistory();
+}
+
+/**
+ * Create a new task or continue existing task
  */
 function createTask() {
     const promptInput = document.getElementById('prompt-input');
@@ -42,8 +87,10 @@ function createTask() {
     const taskContainer = document.getElementById('task-container');
     taskContainer.innerHTML = '<div class="loading-indicator"><span>Creating task...</span></div>';
     
-    // Send request to create task
-    fetch('/api/tasks', {
+    // Send request to create task or continue existing
+    const endpoint = activeTaskId ? `/api/tasks/${activeTaskId}/continue` : '/api/tasks';
+    
+    fetch(endpoint, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'

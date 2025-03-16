@@ -159,6 +159,103 @@ async def get_task_events(task_id: str, db: Session = Depends(get_db)):
         }
     )
 
+@router.post("/tasks/{task_id}/continue")
+async def continue_task(
+    task_id: str,
+    prompt: str = Body(..., embed=True),
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db)
+):
+    """Continue an existing task.
+    
+    Args:
+        task_id: Task ID
+        prompt: The continuation prompt
+        background_tasks: FastAPI background tasks
+        db: Database session
+        
+    Returns:
+        dict: Task ID
+    """
+    # Verify task exists
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Create event queue if it doesn't exist
+    if task_id not in task_queues:
+        task_queues[task_id] = asyncio.Queue()
+    
+    # Start task execution in background with continue flag
+    background_tasks.add_task(run_task, task_id, prompt, continue_task=True)
+    
+    return {"task_id": task_id}
+
+@router.post("/tasks/{task_id}/save")
+async def save_task_state(
+    task_id: str,
+    db: Session = Depends(get_db)
+):
+    """Save the current state of a task.
+    
+    Args:
+        task_id: Task ID
+        db: Database session
+        
+    Returns:
+        dict: Success message
+    """
+    # Verify task exists
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    # Update task timestamp
+    task.updated_at = datetime.utcnow()
+    db.commit()
+    
+    return {"message": "Task state saved successfully"}
+
+@router.post("/tasks/{task_id}/cleanup")
+async def cleanup_task(
+    task_id: str,
+    db: Session = Depends(get_db)
+):
+    """Clean up task resources.
+    
+    Args:
+        task_id: Task ID
+        db: Database session
+        
+    Returns:
+        dict: Success message
+    """
+    # Verify task exists
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    try:
+        # Initialize agent for cleanup
+        agent = ManusPrime()
+        await agent.initialize()
+        
+        # Clean up sandbox session if exists
+        if task.sandbox_session_id:
+            await agent.sandbox_manager.cleanup(task_id)
+        
+        # Update task status
+        crud.update_task_status(db, task_id, "completed")
+        
+        return {"message": "Task resources cleaned up successfully"}
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    finally:
+        await agent.cleanup()
+
 @router.delete("/tasks/{task_id}")
 async def delete_task(
     task_id: str,
@@ -186,7 +283,7 @@ async def delete_task(
     return {"message": "Task deleted successfully"}
 
 # Background task function
-async def run_task(task_id: str, prompt: str):
+async def run_task(task_id: str, prompt: str, continue_task: bool = False):
     """Run a task in the background.
     
     Args:
@@ -208,7 +305,7 @@ async def run_task(task_id: str, prompt: str):
         resource_monitor.start_session(task_id=task_id)
         
         # Execute task
-        result = await agent.execute_task(prompt)
+        result = await agent.execute_task(prompt, task_id=task_id, continue_task=continue_task)
         
         # Store result
         if result["success"]:
