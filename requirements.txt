@@ -24,3 +24,5 @@ faiss-cpu       # Vector similarity search
 sentence-transformers  # Text embeddings
 crawl4ai           # Web crawling and scraping (optional)
 asyncio
+selenium
+chromedriver-autoinstaller
