@@ -44,16 +44,16 @@ class SeleniumSandboxPlugin(Plugin):
             config: Plugin configuration
         """
         super().__init__(config)
-        self.drivers_pool = []
+        self.drivers_pool = {'visible': [], 'headless': []} 
         self.max_pool_size = self.config.get("max_pool_size", 3)
         self.timeout = self.config.get("timeout", 30)
-        self.headless = True
         self.screenshot_dir = Path(self.config.get("screenshot_dir", "sandbox_output"))
         self.save_artifacts = self.config.get("save_artifacts", False)
         self.allowed_domains = self.config.get("allowed_domains", ["localhost", "127.0.0.1"])
         self.max_memory = self.config.get("max_memory", 1024)
         self.pool_lock = asyncio.Lock()
         self.active_sessions = {}
+        logger.info("Selenium sandbox plugin initialized with separate driver pools")
         
         # Create directories
         if self.save_artifacts:
@@ -70,7 +70,6 @@ class SeleniumSandboxPlugin(Plugin):
             return False
             
         try:
-            # Only install chromedriver, don't pre-initialize browser
             chromedriver_autoinstaller.install()
             logger.info("Selenium sandbox plugin initialized successfully")
             return True
@@ -86,7 +85,7 @@ class SeleniumSandboxPlugin(Plugin):
                 timeout: Optional[int] = None,
                 width: int = 1024,
                 height: int = 768,
-                take_screenshot: bool = False,  # Disable screenshots by default
+                take_screenshot: bool = False,
                 **kwargs) -> Dict[str, Any]:
         """Execute and render code in the Selenium sandbox.
         
@@ -112,6 +111,7 @@ class SeleniumSandboxPlugin(Plugin):
         try:
             # Check if this is a sandbox task
             task_type = kwargs.get('task_type')
+            logger.info(f"Execute called with task_type: {task_type}")
             if task_type not in ['sandbox', 'code', 'visualization']:
                 return {
                     "success": True,
@@ -199,7 +199,8 @@ class SeleniumSandboxPlugin(Plugin):
                     self.active_sessions[kwargs['task_id']] = driver
                     logger.info(f"Stored active session for task {kwargs['task_id']}")
                 else:
-                    await self._return_driver(driver)
+                    pool_type = 'headless' if task_type != 'sandbox' else 'visible'
+                    await self._return_driver(driver, pool_type)
                 
                 # Cleanup temp file if we created one
                 if temp_file_path and not file_url:
@@ -224,7 +225,8 @@ class SeleniumSandboxPlugin(Plugin):
                 
             except Exception as e:
                 # Make sure to return the driver to the pool even if an error occurs
-                await self._return_driver(driver)
+                pool_type = 'headless' if task_type != 'sandbox' else 'visible'
+                await self._return_driver(driver, pool_type)
                 raise e
                 
         except Exception as e:
@@ -379,15 +381,24 @@ class SeleniumSandboxPlugin(Plugin):
         """
         chrome_options = Options()
 
-        # Only show browser window for sandbox/visualization tasks
-        use_headless = task_type not in ['sandbox', 'visualization']
+        # Always create visible window for sandbox tasks, headless for others
+        use_headless = task_type != 'sandbox'
+        pool_type = 'headless' if use_headless else 'visible'
+        logger.info(f"Creating driver for task_type={task_type}, use_headless={use_headless}")
+        
         if use_headless:
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-gpu")
+            logger.info("Creating headless driver")
         else:
             # For visible windows, ensure proper display
             chrome_options.add_argument("--start-maximized")
             chrome_options.add_argument("--window-type=normal")
+            chrome_options.add_argument("--window-position=0,0")  # Position window at top-left
+            chrome_options.add_argument("--disable-notifications")  # Prevent notification popups
+            chrome_options.add_argument("--force-device-scale-factor=1")  # Ensure proper scaling
+            # Removed auto-open-devtools to ensure window is more visible
+            logger.info(f"Creating visible driver for {task_type} task, options: {chrome_options.arguments}")
         
         # Security and performance options
         chrome_options.add_argument("--no-sandbox")
@@ -401,16 +412,21 @@ class SeleniumSandboxPlugin(Plugin):
             "profile.managed_default_content_settings.images": 2,
         })
         
-        # Create driver
-        driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(self.timeout)
-        driver.set_script_timeout(self.timeout)
-        
-        # Add to pool
-        async with self.pool_lock:
-            self.drivers_pool.append(driver)
+        try:
+            # Create driver
+            driver = webdriver.Chrome(options=chrome_options)
+            driver.set_page_load_timeout(self.timeout)
+            driver.set_script_timeout(self.timeout)
             
-        return driver
+            # Add to appropriate pool
+            async with self.pool_lock:
+                self.drivers_pool[pool_type].append(driver)
+                logger.info(f"Added new driver to {pool_type} pool")
+            
+            return driver
+        except Exception as e:
+            logger.error(f"Error creating driver: {e}")
+            return None
     
     async def _get_driver(self, width: int, height: int, task_type: Optional[str] = None) -> webdriver.Chrome:
         """Get a driver from the pool or create a new one.
@@ -423,26 +439,49 @@ class SeleniumSandboxPlugin(Plugin):
         Returns:
             webdriver.Chrome: A Chrome webdriver instance
         """
-        async with self.pool_lock:
-            # Try to get a driver from the pool first
-            if self.drivers_pool:
-                driver = self.drivers_pool.pop()
+        pool_type = 'headless' if task_type != 'sandbox' else 'visible'
+        logger.info(f"Getting driver from {pool_type} pool for task type: {task_type}")
+        
+        driver = None
+        try:
+            async with self.pool_lock:
+                # Try to get a driver from the appropriate pool
+                if self.drivers_pool[pool_type]:
+                    driver = self.drivers_pool[pool_type].pop()
+                    logger.debug(f"Reusing existing {pool_type} driver")
+                else:
+                    # Create a new driver
+                    driver = await self._add_driver_to_pool(task_type)
+                    if not driver:
+                        raise Exception("Failed to create new driver")
+                    driver = self.drivers_pool[pool_type].pop()
+                    logger.info(f"Created new {pool_type} driver")
+            
+            # Configure window size and position
+            if task_type == 'sandbox':
+                # For sandbox tasks, ensure window is visible and properly sized
+                driver.maximize_window()
+                driver.set_window_position(0, 0)
+                actual_size = driver.get_window_size()
+                logger.info(f"Window size set to {actual_size['width']}x{actual_size['height']}")
             else:
-                # Create a new driver only when needed
-                driver = await self._add_driver_to_pool(task_type)
-                driver = self.drivers_pool.pop()
+                # For non-sandbox tasks, just set the viewport size
+                driver.set_window_size(width, height)
+                
+        except Exception as e:
+            logger.error(f"Error configuring driver: {e}")
+            if driver:
+                await self._return_driver(driver, pool_type)
+            raise
         
-        # Set viewport size
-        driver.set_window_size(width, height)
-        
-        logger.debug("Created new browser window for sandbox execution")
         return driver
     
-    async def _return_driver(self, driver: webdriver.Chrome) -> None:
+    async def _return_driver(self, driver: webdriver.Chrome, pool_type: str = 'headless') -> None:
         """Return a driver to the pool or close it if pool is full.
         
         Args:
             driver: The Chrome webdriver to return
+            pool_type: Type of pool to return to ('headless' or 'visible')
         """
         try:
             # Clear browser data
@@ -457,12 +496,14 @@ class SeleniumSandboxPlugin(Plugin):
             except:
                 pass
             
-            # Return to pool or close based on pool size
+            # Return to appropriate pool or close based on pool size
             async with self.pool_lock:
-                if len(self.drivers_pool) < self.max_pool_size:
-                    self.drivers_pool.append(driver)
+                if len(self.drivers_pool[pool_type]) < self.max_pool_size:
+                    self.drivers_pool[pool_type].append(driver)
+                    logger.debug(f"Returned driver to {pool_type} pool")
                 else:
                     driver.quit()
+                    logger.debug(f"Closed {pool_type} driver (pool full)")
                     
         except Exception as e:
             logger.warning(f"Error returning driver to pool: {e}")
@@ -491,18 +532,26 @@ class SeleniumSandboxPlugin(Plugin):
             else:
                 # Cleanup all sessions
                 logger.info("Cleaning up all Selenium sandbox resources")
-                for driver in self.drivers_pool:
-                    try:
-                        driver.quit()
-                    except Exception as e:
-                        logger.warning(f"Error closing driver: {e}")
                 
+                # Clean up both visible and headless pools
+                for pool_type in ['visible', 'headless']:
+                    for driver in self.drivers_pool[pool_type]:
+                        try:
+                            driver.quit()
+                            logger.debug(f"Closed driver from {pool_type} pool")
+                        except Exception as e:
+                            logger.warning(f"Error closing {pool_type} driver: {e}")
+                    self.drivers_pool[pool_type] = []
+                
+                # Clean up active sessions
                 for task_id, driver in self.active_sessions.items():
                     try:
                         driver.quit()
+                        logger.debug(f"Closed active session driver for task {task_id}")
                     except Exception as e:
                         logger.warning(f"Error closing session for task {task_id}: {e}")
                 
-                # Clear pools
-                self.drivers_pool = []
+                # Reset state
+                self.drivers_pool = {'visible': [], 'headless': []}
                 self.active_sessions = {}
+                logger.info("All Selenium sandbox resources cleaned up")

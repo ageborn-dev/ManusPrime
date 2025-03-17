@@ -1,52 +1,49 @@
 import logging
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from copy import deepcopy
 
 from plugins.registry import registry
-
 from config import config
 from utils.performance import connection_manager
 from core.memory_manager import MemoryManager
-from core.task_analyzer import TaskAnalyzer
 from core.tool_manager import ToolManager
 from core.sandbox_manager import SandboxManager
+from core.ai_planner import AIPlanner
 
 logger = logging.getLogger("manusprime.core.execution_handler")
 
 class ExecutionHandler:
-    """Handles task execution flows."""
+    """Handles task execution flows using AI planning."""
     
     def __init__(self, 
                 memory_manager: MemoryManager,
-                task_analyzer: TaskAnalyzer,
                 tool_manager: ToolManager,
-                sandbox_manager: SandboxManager):
+                sandbox_manager: SandboxManager,
+                ai_planner: AIPlanner):
         """Initialize ExecutionHandler.
         
         Args:
             memory_manager: Memory manager instance
-            task_analyzer: Task analyzer instance
             tool_manager: Tool manager instance
             sandbox_manager: Sandbox manager instance
+            ai_planner: AI planner instance
         """
         self.memory_manager = memory_manager
-        self.task_analyzer = task_analyzer
         self.tool_manager = tool_manager
         self.sandbox_manager = sandbox_manager
+        self.ai_planner = ai_planner
         
     async def execute(self, 
                      prompt: str, 
                      provider: Any, 
-                     model: Optional[str] = None,
                      cache=None,
                      **kwargs) -> Dict[str, Any]:
-        """Execute a task using the appropriate components.
+        """Execute a task using AI planning and appropriate models.
         
         Args:
             prompt: The task prompt
             provider: The provider plugin instance
-            model: Optional model override
             cache: Optional cache instance
             **kwargs: Additional execution parameters
             
@@ -63,91 +60,78 @@ class ExecutionHandler:
                 "content": "",
                 "tokens": 0,
                 "cost": 0.0,
-                "model": model or "",
                 "execution_time": 0.0,
-                "optimizations": {
-                    "cache_hit": False,
-                    "prompt_optimized": False,
-                    "fallback_used": False
-                }
+                "steps_executed": 0,
+                "models_used": []
             }
-            
-            # Get task type
-            task_type = self.task_analyzer.analyze_task(prompt)
             
             # Check cache
             if cache:
                 logger.debug("Checking cache")
-                cached = cache.get(prompt, model or "default")
+                cached = cache.get(prompt, "default")
                 if cached:
                     logger.debug("Cache hit, returning cached result")
-                    result.update(cached)
-                    result["optimizations"]["cache_hit"] = True
-                    result["execution_time"] = asyncio.get_event_loop().time() - start_time
-                    return result
+                    cached["execution_time"] = asyncio.get_event_loop().time() - start_time
+                    return cached
             
             # Get similar experiences
-            similar_experiences = await self.memory_manager.get_similar_experiences(prompt, task_type)
+            similar_experiences = await self.memory_manager.get_similar_experiences(prompt)
             
             # Enhance prompt with context
-            enhanced_prompt = self.memory_manager.enhance_prompt_with_context(prompt, similar_experiences, task_type)
+            enhanced_prompt = self.memory_manager.enhance_prompt_with_context(prompt, similar_experiences)
             
-            # Optimize request if enabled
-            if config.get_value("performance.prompt_optimization", True):
-                try:
-                    optimized = await connection_manager.optimize_request(
-                        provider=provider.name,
-                        prompt=enhanced_prompt,
-                        **kwargs
-                    )
-                    enhanced_prompt = optimized["prompt"]
-                    result["optimizations"]["prompt_optimized"] = True
-                    logger.debug("Prompt optimization successful")
-                except Exception as e:
-                    logger.warning(f"Prompt optimization failed: {e}")
+            # Get AI execution plan
+            plan = await self.ai_planner.create_execution_plan(enhanced_prompt, provider)
+            logger.info(f"Created execution plan with {len(plan['steps'])} steps")
             
-            # Prepare tools
-            tools = self.tool_manager.prepare_tools(enhanced_prompt)
+            # Execute each step
+            content_parts = []
+            for i, step in enumerate(plan["steps"], 1):
+                logger.info(f"Executing step {i}: {step['description']}")
+                
+                # Get provider for chosen model
+                step_provider_name = self.ai_planner.find_provider_for_model(step["model"])
+                if not step_provider_name:
+                    # Try fallback model
+                    fallback = self.ai_planner.find_fallback_model(step["model"])
+                    if fallback:
+                        step_provider_name, step["model"] = fallback
+                    else:
+                        raise ValueError(f"No provider found for model {step['model']}")
+                
+                # Get provider plugin
+                step_provider = registry.get_plugin(step_provider_name)
+                if not step_provider:
+                    raise ValueError(f"Provider plugin {step_provider_name} not found")
+                
+                # Execute step
+                step_result = await self._execute_step(
+                    step=step,
+                    provider=step_provider,
+                    context="\n".join(content_parts),  # Previous steps' output
+                    **kwargs
+                )
+                
+                # Update tracking
+                content_parts.append(step_result["content"])
+                result["tokens"] += step_result["tokens"]
+                result["cost"] += step_result["cost"]
+                result["models_used"].append(step["model"])
+                result["steps_executed"] += 1
             
-            # Execute with provider
-            response = await self._execute_with_provider(
-                provider=provider,
-                prompt=enhanced_prompt,
-                tools=tools,
-                model=model,
-                **kwargs
-            )
-            
-            # Update result with response
+            # Combine results
             result.update({
                 "success": True,
-                "content": response.get("content", ""),
-                "tokens": response.get("usage", {}).get("total_tokens", 0),
-                "cost": response.get("usage", {}).get("cost", 0.0),
+                "content": "\n\n".join(content_parts),
                 "execution_time": asyncio.get_event_loop().time() - start_time
             })
             
-            # Handle sandbox execution if needed
-            if task_type == 'sandbox' and result["success"]:
-                sandbox_result = await self.sandbox_manager.execute(
-                    result["content"],
-                    task_id=kwargs.get("task_id"),
-                    maintain_session=True
-                )
-                if sandbox_result["success"]:
-                    result["content"] = sandbox_result["enhanced_content"]
-                    result["sandbox_session_id"] = sandbox_result.get("session_id")
-                else:
-                    result["content"] += f"\n\n> **Note**: Sandbox execution failed: {sandbox_result.get('error')}"
+            # Cache result if successful
+            if cache and result["success"]:
+                cache.put(prompt, "default", deepcopy(result))
             
-            # Only cache and store result if not in continuation mode
-            if not kwargs.get("continue_task"):
-                # Cache result
-                if cache and result["success"]:
-                    cache.put(prompt, model or "default", deepcopy(result))
-                
-                # Store in memory
-                await self.memory_manager.store_result(prompt, result, task_type)
+            # Store in memory
+            await self.memory_manager.store_result(prompt, result)
             
             return result
             
@@ -159,96 +143,67 @@ class ExecutionHandler:
                 "success": False,
                 "error": str(e),
                 "execution_time": execution_time,
-                "model": model or "",
                 "tokens": 0,
-                "cost": 0.0,
-                "optimizations": {
-                    "cache_hit": False,
-                    "prompt_optimized": False,
-                    "fallback_used": False
-                }
+                "cost": 0.0
             }
     
-    async def _execute_with_provider(self,
-                                   provider: Any,
-                                   prompt: str,
-                                   tools: list,
-                                   model: Optional[str] = None,
-                                   **kwargs) -> Dict[str, Any]:
-        """Execute with provider and handle tool calls.
+    async def _execute_step(self,
+                         step: Dict[str, Any],
+                         provider: Any,
+                         context: str = "",
+                         **kwargs) -> Dict[str, Any]:
+        """Execute a single step of the plan.
         
         Args:
-            provider: The provider plugin instance
-            prompt: The prompt to execute
-            tools: List of available tools
-            model: Optional model override
-            **kwargs: Additional execution parameters
+            step: Step definition from plan
+            provider: Provider to use
+            context: Output from previous steps
+            **kwargs: Additional parameters
             
         Returns:
-            Dict[str, Any]: Execution result
+            Dict[str, Any]: Step execution result
         """
         try:
-            # Add execution instructions
-            execution_instruction = """
-You are an autonomous task execution agent. Your job is to complete the entire requested task without asking for confirmation or waiting for user input between steps.
+            # Prepare execution prompt
+            prompt = f"""
+Context from previous steps:
+{context}
 
-Important instructions:
-1. Complete the ENTIRE task in one response
-2. Don't ask for permission to continue or for clarification
-3. Make reasonable assumptions when details aren't specified
-4. Use any available tools to accomplish the task
-5. If the task involves creating something, create the complete solution
-6. Provide the final result, not just a plan or outline
+Current task: {step['description']}
 
-When you finish the task, include a brief closing sentence like "The task has been completed. Let me know if you need any adjustments."
-            """
+Complete this specific task, ensuring the output matches the expected type: {step['expected_output']}
+"""
             
-            enhanced_prompt = f"{execution_instruction}\n\nTask: {prompt}"
+            # Execute with provider
+            response = await provider.generate(
+                prompt=prompt,
+                model=step["model"],
+                temperature=kwargs.get("temperature", 0.7)
+            )
             
-            if tools:
-                logger.debug(f"Executing with {len(tools)} tools")
-                response = await provider.generate_with_tools(
-                    prompt=enhanced_prompt,
-                    tools=tools,
-                    model=model,
-                    temperature=kwargs.get('temperature', 0.7),
-                    tool_choice=kwargs.get('tool_choice', 'auto')
+            result = {
+                "content": response.get("content", ""),
+                "tokens": response.get("usage", {}).get("total_tokens", 0),
+                "cost": response.get("usage", {}).get("cost", 0.0)
+            }
+            
+            # Handle UI requirements
+            if step.get("requires_ui", False):
+                sandbox_result = await self.sandbox_manager.execute(
+                    result["content"],
+                    task_type="sandbox",  # Always use sandbox for UI
+                    task_id=kwargs.get("task_id"),
+                    maintain_session=True
                 )
                 
-                # Handle tool calls
-                if tool_calls := response.get('tool_calls', []):
-                    tool_results = []
-                    for tool_call in tool_calls:
-                        result = await self.tool_manager.execute_tool(tool_call, registry)
-                        tool_results.append(f"Tool: {tool_call.get('function', {}).get('name')}\nResult: {result}")
-                    
-                    # Generate completion with tool results
-                    if tool_results:
-                        completion_instruction = """
-Based on the tool results above, complete the entire task. Provide a comprehensive solution that fully addresses the original request. Do not ask for further clarification or permission to proceed - deliver the complete final result.
-
-When you finish the task, include a brief closing sentence like "The task has been completed. Let me know if you need any adjustments."
-                        """
-                        
-                        follow_up = await provider.generate(
-                            prompt=f"Original Task: {prompt}\n\nTool Results:\n{tool_results}\n\n{completion_instruction}",
-                            model=model,
-                            temperature=kwargs.get('temperature', 0.7)
-                        )
-                        response["content"] = follow_up.get('content', '')
-                
-            else:
-                logger.debug("Executing without tools")
-                response = await provider.generate(
-                    prompt=enhanced_prompt,
-                    model=model,
-                    temperature=kwargs.get('temperature', 0.7),
-                    max_tokens=kwargs.get('max_tokens', None)
-                )
+                if sandbox_result["success"]:
+                    result["content"] = sandbox_result["enhanced_content"]
+                else:
+                    result["content"] += f"\n\n> **Note**: UI execution failed: {sandbox_result.get('error')}"
             
-            return response
+            return result
             
         except Exception as e:
-            logger.error(f"Error executing with provider: {e}")
+            logger.error(f"Error executing step: {e}")
             logger.error("Traceback:", exc_info=True)
             raise

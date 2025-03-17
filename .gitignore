@@ -66,6 +66,7 @@ data/browser_profiles/
 screenshots/
 workspace/
 outputs/
+sandbox_output/
 
 # Operating System
 .DS_Store

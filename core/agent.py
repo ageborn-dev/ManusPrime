@@ -8,11 +8,11 @@ from plugins.base import PluginCategory
 from plugins.registry import registry
 from core.batch_processor import BatchProcessor, BatchTask
 from core.cache_manager import LRUCache
-from core.task_analyzer import TaskAnalyzer
 from core.memory_manager import MemoryManager
 from core.tool_manager import ToolManager
 from core.sandbox_manager import SandboxManager
 from core.execution_handler import ExecutionHandler
+from core.ai_planner import AIPlanner, AIPlannerException
 
 logger = logging.getLogger("manusprime.agent")
 
@@ -48,38 +48,18 @@ class ManusPrime:
                 cost_threshold=config.get_value("batch.cost_threshold", 1.0)
             )
             
-            # Task patterns and models
-            task_patterns = {
-                'code': ['code', 'program', 'function', 'script', 'python', 'javascript', 'java', 'cpp'],
-                'planning': ['plan', 'organize', 'strategy', 'workflow', 'complex', 'steps'],
-                'tool_use': ['search', 'browse', 'file', 'execute', 'run', 'automate', 'zapier'],
-                'creative': ['story', 'poem', 'creative', 'write', 'essay', 'blog'],
-                'crawl': ['crawl', 'scrape', 'extract', 'website', 'webpage', 'web content'],
-                'sandbox': ['simulation', 'interactive', 'web app', 'application', 'browser', 'visualization']
-            }
-            
-            task_models = {
-                'code': config.get_value('task_models.code_generation', 'codestral-latest'),
-                'planning': config.get_value('task_models.planning', 'claude-3.7-sonnet'),
-                'tool_use': config.get_value('task_models.tool_use', 'claude-3.7-sonnet'),
-                'creative': config.get_value('task_models.creative', 'claude-3.7-sonnet'),
-                'crawl': config.get_value('task_models.crawler', 'gpt-4o'),
-                'sandbox': config.get_value('task_models.sandbox', 'gpt-4o'),
-                'default': config.get_value('task_models.default', 'mistral-small-latest')
-            }
-            
             # Initialize managers
-            self.task_analyzer = TaskAnalyzer(task_patterns, task_models)
             self.memory_manager = MemoryManager()
             self.tool_manager = ToolManager()
             self.sandbox_manager = SandboxManager()
+            self.ai_planner = AIPlanner()
             
             # Initialize execution handler
             self.execution_handler = ExecutionHandler(
                 memory_manager=self.memory_manager,
-                task_analyzer=self.task_analyzer,
                 tool_manager=self.tool_manager,
-                sandbox_manager=self.sandbox_manager
+                sandbox_manager=self.sandbox_manager,
+                ai_planner=self.ai_planner
             )
             
             # Track usage
@@ -138,7 +118,7 @@ class ManusPrime:
                         task: Union[str, BatchTask], 
                         batch_mode: bool = False,
                         **kwargs) -> Dict:
-        """Execute a task using the appropriate plugins and models.
+        """Execute a task using AI planning and appropriate models.
         
         Args:
             task: The task to execute
@@ -173,15 +153,10 @@ class ManusPrime:
             if not provider:
                 raise ValueError("No provider plugin active")
             
-            # Get model if not specified
-            if not task.model:
-                task.model = self.task_analyzer.select_model(task.prompt)
-            
-            # Execute task
+            # Execute task with AI planning
             result = await self.execution_handler.execute(
                 prompt=task.prompt,
                 provider=provider,
-                model=task.model,
                 cache=self.cache,
                 **kwargs
             )
@@ -201,7 +176,7 @@ class ManusPrime:
                 "success": False,
                 "error": str(e),
                 "execution_time": 0.0,
-                "model": task.model,
+                "model": task.model if isinstance(task, BatchTask) else None,
                 "tokens": 0,
                 "cost": 0.0
             }

@@ -235,8 +235,12 @@ function displayResult(data) {
  * Display resource usage information
  */
 function displayResourceUsage(data) {
-    // Only display if we have resource data
-    if (!data.tokens || !data.cost) {
+    // Log resource data for debugging
+    console.log('Resource usage data:', data);
+    
+    // Only display if we have resource data (checking for undefined/null)
+    if (!data || data.tokens === undefined || data.cost === undefined) {
+        console.warn('Missing resource usage data:', data);
         return;
     }
     
@@ -483,8 +487,9 @@ function loadTask(taskId) {
                 });
             }
             
-            // Display resource usage if available
-            if (task.resource_usage) {
+            // Display resource usage if available (with debugging)
+            console.log('Task resource usage:', task.resource_usage);
+            if (task.resource_usage && task.resource_usage.total_tokens !== undefined && task.resource_usage.cost !== undefined) {
                 const resourceDiv = document.createElement('div');
                 resourceDiv.className = 'resource-usage';
                 
