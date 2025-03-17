@@ -38,9 +38,21 @@ class PluginRegistry:
             # Set to track class paths to prevent duplicate registration
             self.registered_class_paths: Set[str] = set()
             
+            # Plugin capability tracking
+            self.plugin_capabilities: Dict[str, Set[str]] = {}
+            
+            # Plugin requirements tracking
+            self.plugin_requirements: Dict[str, Set[str]] = {}
+            
+            # Plugin dependency graph
+            self.plugin_dependencies: Dict[str, Set[str]] = {}
+            
+            # Performance metrics for plugins
+            self.plugin_metrics: Dict[str, Dict] = {}
+            
             self._initialized = True
     
-    def register_plugin_class(self, plugin_class: Type[Plugin]) -> bool:
+    def register_plugin_class(self, plugin_class: Type[Plugin], analyze_capabilities: bool = True) -> bool:
         """Register a plugin class.
         
         Args:
@@ -83,12 +95,78 @@ class PluginRegistry:
             if existing_class_path != class_path:
                 logger.warning(f"Plugin name '{plugin_name}' already registered by {existing_class_path}. Will be overwritten by {class_path}")
         
+        # Analyze plugin capabilities and requirements
+        if analyze_capabilities:
+            capabilities = self._analyze_plugin_capabilities(plugin_class)
+            requirements = self._analyze_plugin_requirements(plugin_class)
+            
+            self.plugin_capabilities[plugin_name] = capabilities
+            self.plugin_requirements[plugin_name] = requirements
+            
+            # Update dependency graph
+            self.plugin_dependencies[plugin_name] = set()
+            for req in requirements:
+                # Find plugins that provide required capabilities
+                for p_name, p_caps in self.plugin_capabilities.items():
+                    if req in p_caps:
+                        self.plugin_dependencies[plugin_name].add(p_name)
+        
         # Add to tracking sets and dictionaries
         self.registered_class_paths.add(class_path)
         self.plugin_classes[plugin_name] = plugin_class
         logger.debug(f"Registered plugin class: {plugin_name} ({plugin_class.category.value})")
         
         return True
+    
+    def _analyze_plugin_capabilities(self, plugin_class: Type[Plugin]) -> Set[str]:
+        """Analyze a plugin class to determine its capabilities.
+        
+        Args:
+            plugin_class: The plugin class to analyze
+            
+        Returns:
+            Set[str]: Set of capability identifiers
+        """
+        capabilities = set()
+        
+        # Check for explicitly declared capabilities
+        if hasattr(plugin_class, 'capabilities'):
+            capabilities.update(plugin_class.capabilities)
+        
+        # Analyze methods
+        for name, member in inspect.getmembers(plugin_class):
+            if inspect.isfunction(member) or inspect.iscoroutinefunction(member):
+                # Add method name as a capability
+                if not name.startswith('_'):
+                    capabilities.add(f"method:{name}")
+                
+                # Check for capability decorators or annotations
+                if hasattr(member, '_capabilities'):
+                    capabilities.update(member._capabilities)
+        
+        return capabilities
+    
+    def _analyze_plugin_requirements(self, plugin_class: Type[Plugin]) -> Set[str]:
+        """Analyze a plugin class to determine its requirements.
+        
+        Args:
+            plugin_class: The plugin class to analyze
+            
+        Returns:
+            Set[str]: Set of required capability identifiers
+        """
+        requirements = set()
+        
+        # Check for explicitly declared requirements
+        if hasattr(plugin_class, 'requirements'):
+            requirements.update(plugin_class.requirements)
+        
+        # Analyze class attributes and methods for dependencies
+        for name, member in inspect.getmembers(plugin_class):
+            if hasattr(member, '_requires'):
+                requirements.update(member._requires)
+        
+        return requirements
     
     async def activate_plugin(self, plugin_name: str, config: Optional[Dict] = None) -> Optional[Plugin]:
         """Activate a plugin by name.
@@ -107,8 +185,24 @@ class PluginRegistry:
         plugin_class = self.plugin_classes[plugin_name]
         
         try:
-            # Create plugin instance
+            # Check and activate required dependencies first
+            if plugin_name in self.plugin_dependencies:
+                for dep_name in self.plugin_dependencies[plugin_name]:
+                    if dep_name not in self.plugin_instances:
+                        dep_instance = await self.activate_plugin(dep_name, config)
+                        if not dep_instance:
+                            logger.error(f"Failed to activate required dependency '{dep_name}' for '{plugin_name}'")
+                            return None
+            
+            # Create plugin instance with dependency injection
             plugin_instance = plugin_class(config)
+            
+            # Inject dependencies if needed
+            for dep_name in self.plugin_dependencies.get(plugin_name, set()):
+                if hasattr(plugin_instance, f"set_{dep_name}"):
+                    dep_instance = self.plugin_instances.get(dep_name)
+                    if dep_instance:
+                        getattr(plugin_instance, f"set_{dep_name}")(dep_instance)
             
             # Initialize the plugin
             success = await plugin_instance.initialize()
@@ -193,6 +287,32 @@ class PluginRegistry:
         logger.info(f"Discovered {new_plugins} new plugin classes from {plugin_dir}")
         
         return new_plugins
+    
+    def find_plugins_by_capability(self, capability: str) -> List[Plugin]:
+        """Find plugins that provide a specific capability.
+        
+        Args:
+            capability: The capability to search for
+            
+        Returns:
+            List[Plugin]: List of plugin instances providing the capability
+        """
+        matching_plugins = []
+        for plugin_name, capabilities in self.plugin_capabilities.items():
+            if capability in capabilities and plugin_name in self.plugin_instances:
+                matching_plugins.append(self.plugin_instances[plugin_name])
+        return matching_plugins
+    
+    def get_plugin_capabilities(self, plugin_name: str) -> Set[str]:
+        """Get the capabilities of a plugin.
+        
+        Args:
+            plugin_name: Name of the plugin
+            
+        Returns:
+            Set[str]: Set of plugin capabilities
+        """
+        return self.plugin_capabilities.get(plugin_name, set())
     
     def get_plugin(self, name: str) -> Optional[Plugin]:
         """Get a plugin instance by name.

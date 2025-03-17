@@ -17,6 +17,24 @@ class PluginCategory(str, Enum):
     UTILITY = "utility"
 
 
+def capability(*capabilities):
+    """Decorator to mark plugin methods with capabilities."""
+    def decorator(func):
+        if not hasattr(func, '_capabilities'):
+            func._capabilities = set()
+        func._capabilities.update(capabilities)
+        return func
+    return decorator
+
+def requires(*requirements):
+    """Decorator to mark plugin methods with requirements."""
+    def decorator(func):
+        if not hasattr(func, '_requires'):
+            func._requires = set()
+        func._requires.update(requirements)
+        return func
+    return decorator
+
 class Plugin(ABC):
     """Base class for all plugins in ManusPrime."""
     
@@ -26,10 +44,22 @@ class Plugin(ABC):
     version: ClassVar[str] = "0.1.0"
     category: ClassVar[PluginCategory] = None
     
+    # Plugin capabilities and requirements
+    capabilities: ClassVar[set] = set()
+    requirements: ClassVar[set] = set()
+    
     def __init__(self, config: Optional[Dict] = None):
         """Initialize the plugin with optional configuration."""
         self.config = config or {}
         self.initialized = False
+        self._dependencies = {}
+        self._performance_metrics = {
+            "calls": 0,
+            "success_rate": 0.0,
+            "avg_response_time": 0.0,
+            "last_error": None,
+            "last_success_time": None
+        }
     
     @abstractmethod
     async def initialize(self) -> bool:
@@ -56,6 +86,52 @@ class Plugin(ABC):
         """Clean up resources used by the plugin."""
         pass
     
+    def inject_dependency(self, name: str, instance: 'Plugin') -> None:
+        """Inject a plugin dependency.
+        
+        Args:
+            name: Name of the dependency
+            instance: Plugin instance to inject
+        """
+        self._dependencies[name] = instance
+        
+        # Try to call a setter if it exists
+        setter_name = f"set_{name}"
+        if hasattr(self, setter_name):
+            getattr(self, setter_name)(instance)
+    
+    def get_dependency(self, name: str) -> Optional['Plugin']:
+        """Get an injected dependency.
+        
+        Args:
+            name: Name of the dependency
+            
+        Returns:
+            Optional[Plugin]: The dependency plugin instance if found
+        """
+        return self._dependencies.get(name)
+    
+    def update_metrics(self, success: bool, response_time: float) -> None:
+        """Update plugin performance metrics.
+        
+        Args:
+            success: Whether the operation was successful
+            response_time: Time taken for the operation
+        """
+        self._performance_metrics["calls"] += 1
+        
+        # Update success rate
+        total_success = self._performance_metrics["success_rate"] * (self._performance_metrics["calls"] - 1)
+        total_success += 1 if success else 0
+        self._performance_metrics["success_rate"] = total_success / self._performance_metrics["calls"]
+        
+        # Update average response time
+        old_avg = self._performance_metrics["avg_response_time"]
+        self._performance_metrics["avg_response_time"] = (
+            (old_avg * (self._performance_metrics["calls"] - 1) + response_time) / 
+            self._performance_metrics["calls"]
+        )
+    
     @property
     def info(self) -> Dict:
         """Get information about the plugin."""
@@ -64,11 +140,23 @@ class Plugin(ABC):
             "description": self.description,
             "version": self.version,
             "category": self.category.value if self.category else None,
-            "initialized": self.initialized
+            "initialized": self.initialized,
+            "capabilities": list(self.capabilities),
+            "requirements": list(self.requirements),
+            "dependencies": list(self._dependencies.keys()),
+            "performance": self._performance_metrics
         }
 
 
 class ProviderPlugin(Plugin):
+    """Base class for AI provider plugins with enhanced capabilities."""
+    
+    capabilities = {
+        "text_generation",
+        "model_selection",
+        "token_counting",
+        "cost_estimation"
+    }
     """Base class for AI provider plugins."""
     
     category: ClassVar[PluginCategory] = PluginCategory.PROVIDER

@@ -114,9 +114,87 @@ class ManusPrime:
             logger.error("Traceback:", exc_info=True)
             return False
     
+    async def _analyze_task(self, prompt: str, provider: Any) -> Dict[str, Any]:
+        """Analyze task using AI to determine type and requirements.
+        
+        Args:
+            prompt: The task prompt
+            provider: The provider plugin instance
+            
+        Returns:
+            Dict[str, Any]: Analysis results containing task type, capabilities needed,
+                           suggested models, and required plugins
+        """
+        logger.debug(f"Analyzing task: {prompt[:100]}...")
+        
+        try:
+            # Get best reasoning model for analysis
+            analysis_model = await self.ai_planner.get_analysis_model(provider)
+            if not analysis_model:
+                raise ValueError("No suitable model available for task analysis")
+            
+            # Create analysis prompt
+            analysis_prompt = f"""
+Analyze this task and provide a structured assessment. Task: "{prompt}"
+
+Consider:
+1. Core task type (e.g. coding, creative, research, analysis)
+2. Required capabilities (e.g. code generation, text analysis, math)
+3. Complexity level (simple, moderate, complex)
+4. Needed plugins or tools
+5. Execution pattern (sequential, parallel)
+
+Respond in JSON format:
+{{
+    "task_type": "primary task category",
+    "capabilities": ["capability1", "capability2"],
+    "complexity": "complexity level",
+    "plugins": ["plugin1", "plugin2"],
+    "execution_pattern": "sequential or parallel",
+    "additional_context": "any important notes"
+}}
+"""
+            # Get analysis from model
+            response = await provider.generate(
+                prompt=analysis_prompt,
+                model=analysis_model,
+                temperature=0.7,
+                response_format={"type": "json"}
+            )
+            
+            try:
+                analysis = response.get("content", "{}")
+                if isinstance(analysis, str):
+                    import json
+                    analysis = json.loads(analysis)
+                
+                logger.debug(f"Task analysis completed: {analysis}")
+                return analysis
+                
+            except Exception as e:
+                logger.error(f"Failed to parse task analysis: {e}")
+                return {
+                    "task_type": "default",
+                    "capabilities": [],
+                    "complexity": "moderate",
+                    "plugins": [],
+                    "execution_pattern": "sequential"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in task analysis: {e}")
+            return {
+                "task_type": "default",
+                "capabilities": [],
+                "complexity": "moderate",
+                "plugins": [],
+                "execution_pattern": "sequential"
+            }
+    
     async def execute_task(self, 
                         task: Union[str, BatchTask], 
                         batch_mode: bool = False,
+                        task_type: Optional[str] = None,
                         **kwargs) -> Dict:
         """Execute a task using AI planning and appropriate models.
         
@@ -153,11 +231,16 @@ class ManusPrime:
             if not provider:
                 raise ValueError("No provider plugin active")
             
-            # Execute task with AI planning
+            # Analyze task and determine execution strategy
+            prompt = task.prompt if isinstance(task, BatchTask) else task
+            task_analysis = await self._analyze_task(prompt, provider)
+            
+            # Execute task with AI planning using analysis results
             result = await self.execution_handler.execute(
-                prompt=task.prompt,
+                prompt=task.prompt if isinstance(task, BatchTask) else task,
                 provider=provider,
                 cache=self.cache,
+                task_type=task_type,
                 **kwargs
             )
             

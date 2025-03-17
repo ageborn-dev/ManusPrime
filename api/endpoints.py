@@ -235,6 +235,7 @@ async def cleanup_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    agent = None
     try:
         # Initialize agent for cleanup
         agent = ManusPrime()
@@ -254,7 +255,8 @@ async def cleanup_task(
         raise HTTPException(status_code=500, detail=str(e))
         
     finally:
-        await agent.cleanup()
+        if agent:
+            await agent.cleanup()
 
 @router.delete("/tasks/{task_id}")
 async def delete_task(
@@ -282,7 +284,57 @@ async def delete_task(
     
     return {"message": "Task deleted successfully"}
 
-# Background task function
+# New endpoints for capabilities and metrics
+@router.get("/capabilities")
+async def get_capabilities():
+    """Get available plugin capabilities."""
+    registry_instance = registry.PluginRegistry()
+    capabilities = {}
+    
+    for plugin_name, plugin_class in registry_instance.plugin_classes.items():
+        caps = registry_instance.get_plugin_capabilities(plugin_name)
+        if caps:
+            capabilities[plugin_name] = list(caps)
+    
+    return {"capabilities": capabilities}
+
+@router.get("/plugins/metrics")
+async def get_plugin_metrics():
+    """Get plugin performance metrics."""
+    registry_instance = registry.PluginRegistry()
+    metrics = {}
+    
+    for plugin_name, plugin in registry_instance.plugin_instances.items():
+        if hasattr(plugin, 'info'):
+            info = plugin.info
+            if 'performance' in info:
+                metrics[plugin_name] = info['performance']
+    
+    return {"metrics": metrics}
+
+@router.get("/tasks/{task_id}/analysis")
+async def get_task_analysis(task_id: str, db: Session = Depends(get_db)):
+    """Get AI task analysis results."""
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    analysis = crud.get_task_analysis(db, task_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Task analysis not found")
+    
+    return analysis
+
+@router.get("/tasks/{task_id}/steps")
+async def get_task_steps(task_id: str, db: Session = Depends(get_db)):
+    """Get parallel execution step status."""
+    task = crud.get_task(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    steps = crud.get_task_steps(db, task_id)
+    return {"steps": steps}
+
 async def run_task(task_id: str, prompt: str, continue_task: bool = False):
     """Run a task in the background.
     
@@ -291,6 +343,7 @@ async def run_task(task_id: str, prompt: str, continue_task: bool = False):
         prompt: Task prompt
     """
     db = next(get_db())
+    agent = None
     
     try:
         # Update task status
@@ -304,22 +357,51 @@ async def run_task(task_id: str, prompt: str, continue_task: bool = False):
         # Start resource monitoring
         resource_monitor.start_session(task_id=task_id)
         
-        # Execute task
-        result = await agent.execute_task(prompt, task_id=task_id, continue_task=continue_task)
+        # Get provider for task analysis
+        provider = registry.get_active_plugin(PluginCategory.PROVIDER)
+        if not provider:
+            raise ValueError("No provider plugin active")
+            
+        # Analyze task using AI
+        task_analysis = await agent.ai_planner.create_execution_plan(prompt, provider)
         
-        # Store result
+        # Store task analysis
+        crud.store_task_analysis(db, task_id, task_analysis)
+        
+        # Execute task with AI analysis
+        result = await agent.execute_task(
+            prompt, 
+            task_id=task_id,
+            continue_task=continue_task,
+            task_analysis=task_analysis
+        )
+        
+        # Store results with steps information
         if result["success"]:
             content = result["content"]
+            steps_executed = result.get("steps_executed", 0)
+            execution_pattern = result.get("execution_pattern", "sequential")
+            
             crud.create_task_result(db, task_id, content, "text")
             crud.update_task_status(db, task_id, "completed")
             
-            # Send result event
-            await _send_event(task_id, "result", {"content": content})
+            # Store step results if available
+            if "step_results" in result:
+                for step in result["step_results"]:
+                    crud.store_task_step(db, task_id, step)
             
-            # Send complete event
+            # Send enhanced result event
+            await _send_event(task_id, "result", {
+                "content": content,
+                "steps_executed": steps_executed,
+                "execution_pattern": execution_pattern
+            })
+            
+            # Send complete event with additional metrics
             await _send_event(task_id, "complete", {
                 "message": "Task completed successfully",
-                "execution_time": result["execution_time"]
+                "execution_time": result["execution_time"],
+                "performance_metrics": result.get("performance_metrics", {})
             })
         else:
             error = result.get("error", "Unknown error")

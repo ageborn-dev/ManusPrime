@@ -38,6 +38,7 @@ class ExecutionHandler:
                      prompt: str, 
                      provider: Any, 
                      cache=None,
+                     task_analysis: Dict[str, Any] = None,
                      **kwargs) -> Dict[str, Any]:
         """Execute a task using AI planning and appropriate models.
         
@@ -74,19 +75,71 @@ class ExecutionHandler:
                     cached["execution_time"] = asyncio.get_event_loop().time() - start_time
                     return cached
             
-            # Get similar experiences
-            similar_experiences = await self.memory_manager.get_similar_experiences(prompt)
+            # Get similar experiences using task type from analysis
+            task_type = task_analysis.get("analysis", {}).get("task_type", "default")
+            similar_experiences = await self.memory_manager.get_similar_experiences(prompt, task_type)
             
             # Enhance prompt with context
-            enhanced_prompt = self.memory_manager.enhance_prompt_with_context(prompt, similar_experiences)
+            enhanced_prompt = self.memory_manager.enhance_prompt_with_context(prompt, similar_experiences, task_type)
             
-            # Get AI execution plan
-            plan = await self.ai_planner.create_execution_plan(enhanced_prompt, provider)
-            logger.info(f"Created execution plan with {len(plan['steps'])} steps")
+            # Get or use provided execution plan
+            if not task_analysis:
+                task_analysis = await self.ai_planner.create_execution_plan(enhanced_prompt, provider, cache)
             
-            # Execute each step
-            content_parts = []
-            for i, step in enumerate(plan["steps"], 1):
+            execution_plan = task_analysis.get("execution_plan", {})
+            steps = execution_plan.get("steps", [])
+            logger.info(f"Processing execution plan with {len(steps)} steps")
+            
+            # Prepare step execution
+            content_parts = {}
+            pending_steps = {step["id"]: step for step in steps}
+            completed_steps = set()
+            
+            # Process steps based on dependencies
+            while pending_steps:
+                # Find steps that can be executed (all dependencies met)
+                executable_steps = [
+                    step for step_id, step in pending_steps.items()
+                    if all(dep in completed_steps for dep in step.get("dependencies", []))
+                ]
+                
+                if not executable_steps:
+                    raise ValueError("Circular dependency detected in execution plan")
+                
+                # Execute steps in parallel if allowed
+                if execution_plan.get("parallel_execution", False):
+                    tasks = [
+                        self._execute_step(
+                            step=step,
+                            provider=provider,
+                            context="\n".join([content_parts.get(dep, "") for dep in step.get("dependencies", [])]),
+                            **kwargs
+                        )
+                        for step in executable_steps
+                    ]
+                    step_results = await asyncio.gather(*tasks)
+                else:
+                    step_results = []
+                    for step in executable_steps:
+                        result = await self._execute_step(
+                            step=step,
+                            provider=provider,
+                            context="\n".join([content_parts.get(dep, "") for dep in step.get("dependencies", [])]),
+                            **kwargs
+                        )
+                        step_results.append(result)
+                
+                # Process results
+                for step, step_result in zip(executable_steps, step_results):
+                    content_parts[step["id"]] = step_result["content"]
+                    completed_steps.add(step["id"])
+                    del pending_steps[step["id"]]
+                    
+                    # Update tracking
+                    result["tokens"] += step_result["tokens"]
+                    result["cost"] += step_result["cost"]
+                    result["models_used"].append(step["model"])
+                    result["steps_executed"] += 1
                 logger.info(f"Executing step {i}: {step['description']}")
                 
                 # Get provider for chosen model
@@ -119,11 +172,18 @@ class ExecutionHandler:
                 result["models_used"].append(step["model"])
                 result["steps_executed"] += 1
             
-            # Combine results
+            # Combine results in dependency order
+            ordered_content = []
+            for step in steps:
+                if step["id"] in content_parts:
+                    ordered_content.append(content_parts[step["id"]])
+            
             result.update({
                 "success": True,
-                "content": "\n\n".join(content_parts),
-                "execution_time": asyncio.get_event_loop().time() - start_time
+                "content": "\n\n".join(ordered_content),
+                "execution_time": asyncio.get_event_loop().time() - start_time,
+                "execution_pattern": "parallel" if execution_plan.get("parallel_execution", False) else "sequential",
+                "performance_metrics": task_analysis.get("performance_estimates", {})
             })
             
             # Cache result if successful
@@ -131,7 +191,7 @@ class ExecutionHandler:
                 cache.put(prompt, "default", deepcopy(result))
             
             # Store in memory
-            await self.memory_manager.store_result(prompt, result)
+            await self.memory_manager.store_result(prompt, result, task_type)
             
             return result
             
