@@ -1,5 +1,6 @@
 # plugins/__init__.py
 from plugins.base import Plugin, PluginCategory
+from plugins.registry import registry
 
 # Import all plugin types
 from plugins.automation import ZapierPlugin
@@ -14,6 +15,7 @@ from plugins.web_crawler import Crawl4AIPlugin
 __all__ = [
     'Plugin', 
     'PluginCategory',
+    'registry',
     'ZapierPlugin',
     'BrowserUserPlugin',
     'PythonExecutePlugin',

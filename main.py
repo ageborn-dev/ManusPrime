@@ -16,7 +16,8 @@ async def run_agent(prompt: str, model: Optional[str] = None):
         prompt: The prompt to execute
         model: Optional specific model to use
     """
-    # Initialize agent
+    # Initialize plugin manager and agent
+    await plugin_manager.initialize()
     agent = ManusPrime()
     await agent.initialize()
     

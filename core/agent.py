@@ -1,11 +1,11 @@
 import logging
 import asyncio
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, Any
 import uuid
 
 from config import config
 from plugins.base import PluginCategory
-from plugins.registry import registry
+from core.plugin_manager import plugin_manager
 from core.batch_processor import BatchProcessor, BatchTask
 from core.cache_manager import LRUCache
 from core.memory_manager import MemoryManager
@@ -85,25 +85,20 @@ class ManusPrime:
             return True
             
         try:
-            # Discover available plugins
-            registry.discover_plugins()
-            
             # Initialize vector memory
-            self.memory_manager.vector_memory = registry.get_plugin("vector_memory")
+            self.memory_manager.vector_memory = await plugin_manager.get_plugin("vector_memory")
             if self.memory_manager.vector_memory:
                 await self.memory_manager.vector_memory.initialize()
             
             # Activate required plugins
             for category, plugin_name in config.active_plugins.items():
                 if plugin_name:
-                    plugin_config = config.get_plugin_config(plugin_name)
-                    await registry.activate_plugin(plugin_name, plugin_config)
+                    await plugin_manager.get_plugin(plugin_name)
             
             # Activate default provider if needed
-            provider = registry.get_active_plugin(PluginCategory.PROVIDER)
+            provider = await plugin_manager.get_active_plugin(PluginCategory.PROVIDER)
             if not provider:
-                provider_config = config.get_provider_config(self.default_provider)
-                await registry.activate_plugin(self.default_provider, provider_config)
+                await plugin_manager.get_plugin(self.default_provider)
             
             self.initialized = True
             logger.info("ManusPrime agent initialized successfully")
@@ -227,7 +222,7 @@ Respond in JSON format:
                 return await self._execute_batch_task(task, **kwargs)
             
             # Get provider
-            provider = registry.get_active_plugin(PluginCategory.PROVIDER)
+            provider = await plugin_manager.get_active_plugin(PluginCategory.PROVIDER)
             if not provider:
                 raise ValueError("No provider plugin active")
             
@@ -285,7 +280,7 @@ Respond in JSON format:
     async def cleanup(self):
         """Clean up resources used by the agent."""
         try:
-            await registry.cleanup_all()
+            await plugin_manager.cleanup()
             self.initialized = False
             logger.info("ManusPrime agent cleanup completed")
         except Exception as e:
