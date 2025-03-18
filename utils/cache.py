@@ -1,4 +1,3 @@
-# utils/cache.py
 import os
 import json
 import hashlib
@@ -6,7 +5,9 @@ import time
 import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+from collections import OrderedDict
 from functools import wraps
+import asyncio
 
 logger = logging.getLogger("manusprime.utils.cache")
 
@@ -117,6 +118,92 @@ class Cache:
         key_hash = hashlib.md5(key.encode()).hexdigest()
         return self.cache_dir / f"{key_hash}.json"
 
+class LRUCache(Cache):
+    """LRU Cache implementation that extends the base Cache."""
+    
+    def __init__(self, capacity: int = 1000, ttl: int = 3600):
+        """Initialize LRU cache.
+        
+        Args:
+            capacity: Maximum number of items to store
+            ttl: Time to live in seconds (default 1 hour)
+        """
+        super().__init__(cache_dir="cache", max_age=ttl)
+        self.capacity = capacity
+        self.cache = OrderedDict()  # Memory cache
+        self.timestamps = {}  # Keep track of entry times
+        
+        # Load persisted cache into memory
+        self._load_cache()
+    
+    def get(self, key: str, model: str = "default") -> Optional[Any]:
+        """Get from memory first, fallback to disk.
+        
+        Args:
+            key: Cache key
+            model: Model identifier for domain separation
+            
+        Returns:
+            Optional[Any]: Cached value or None if not found or expired
+        """
+        cache_key = f"{key}:{model}"
+        
+        # Try memory cache first
+        if cache_key in self.cache:
+            if time.time() - self.timestamps[cache_key] <= self.max_age:
+                self.cache.move_to_end(cache_key)
+                return self.cache[cache_key]
+            # If expired, remove from memory
+            del self.cache[cache_key]
+            del self.timestamps[cache_key]
+            
+        # Fallback to disk cache
+        disk_value = super().get(cache_key)
+        if disk_value is not None:
+            # Add to memory cache
+            self.put(key, disk_value, model)
+        return disk_value
+        
+    def put(self, key: str, value: Any, model: str = "default"):
+        """Put in both memory and disk cache.
+        
+        Args:
+            key: Cache key
+            value: Value to cache
+            model: Model identifier for domain separation
+        """
+        cache_key = f"{key}:{model}"
+        
+        # Update memory cache
+        self.cache[cache_key] = value
+        self.timestamps[cache_key] = time.time()
+        self.cache.move_to_end(cache_key)
+        
+        # Enforce capacity limit
+        while len(self.cache) > self.capacity:
+            oldest_key, _ = self.cache.popitem(last=False)
+            del self.timestamps[oldest_key]
+            
+        # Update disk cache
+        super().set(cache_key, value)
+    
+    def _load_cache(self):
+        """Load cache from disk into memory."""
+        try:
+            model_cache_file = self.cache_dir / "model_cache.json"
+            if model_cache_file.exists():
+                with open(model_cache_file, "r") as f:
+                    data = json.load(f)
+                
+                current_time = time.time()
+                for key, value in data.get("cache", {}).items():
+                    timestamp = data.get("timestamps", {}).get(key)
+                    if timestamp and (current_time - timestamp <= self.max_age):
+                        self.cache[key] = value
+                        self.timestamps[key] = timestamp
+                
+        except Exception as e:
+            logger.warning(f"Error loading cache from disk: {e}")
 
 # Cache decorator
 def cached(cache: Optional[Cache] = None, max_age: int = 3600):

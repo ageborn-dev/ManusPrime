@@ -18,35 +18,23 @@ class OpenAIProvider(ProviderPlugin):
     category: ClassVar[PluginCategory] = PluginCategory.PROVIDER
     supported_models: ClassVar[List[str]] = [
         "gpt-4o",
-        "gpt-4o-mini",
-        "gpt-4-turbo",
-        "gpt-3.5-turbo"
+        "gpt-4o-mini"
     ]
     
     def __init__(self, config: Optional[Dict] = None):
-        """Initialize the OpenAI provider.
-        
-        Args:
-            config: Provider configuration
-        """
+        """Initialize the OpenAI provider."""
         super().__init__(config)
         self.client = None
         self.api_key = None
         self.base_url = "https://api.openai.com/v1"
         self.model_costs = {
-            "gpt-4o": 0.010,        # $0.010 per 1K tokens
-            "gpt-4o-mini": 0.005,   # $0.005 per 1K tokens
-            "gpt-4-turbo": 0.010,   # $0.010 per 1K tokens
-            "gpt-3.5-turbo": 0.001  # $0.001 per 1K tokens
+            "gpt-4o": 0.010,
+            "gpt-4o-mini": 0.005,
         }
-        self.default_model = "gpt-4o"
+        self.default_model = "gpt-4o-mini"
     
     async def initialize(self) -> bool:
-        """Initialize the OpenAI client.
-        
-        Returns:
-            bool: True if initialization was successful
-        """
+        """Initialize the OpenAI client."""
         try:
             # Extract config
             self.api_key = self.config.get("api_key", "")
@@ -73,18 +61,7 @@ class OpenAIProvider(ProviderPlugin):
         max_tokens: Optional[int] = None,
         **kwargs
     ) -> Dict:
-        """Generate a response from GPT.
-        
-        Args:
-            prompt: The prompt to send to the model
-            model: The specific model to use
-            temperature: The sampling temperature
-            max_tokens: The maximum number of tokens to generate
-            **kwargs: Additional model-specific parameters
-            
-        Returns:
-            Dict: The response data
-        """
+        """Generate a response using the Chat Completions API."""
         if not self.client:
             raise ValueError("OpenAI provider not initialized")
         
@@ -92,39 +69,54 @@ class OpenAIProvider(ProviderPlugin):
         model_name = model if model in self.supported_models else self.default_model
         
         try:
-            # Prepare messages format
-            messages = [{"role": "user", "content": prompt}]
+            # Prepare messages with system instruction for JSON output
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You must follow the exact output format specified in the prompt. Provide your response in plain text without any additional formatting or explanations."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+            
+            # Prepare base request parameters
+            params = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature
+            }
+            
+            # Add max_tokens if provided
+            if max_tokens is not None:
+                params["max_tokens"] = max_tokens
+            
+            # Filter kwargs to only include supported parameters
+            supported_params = {
+                "frequency_penalty", "logit_bias", "max_tokens",
+                "n", "presence_penalty", "stop", "stream", 
+                "temperature", "top_p", "user"
+            }
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+            params.update(filtered_kwargs)
             
             # Make the API call
-            response = await self.client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+            response = await self.client.chat.completions.create(**params)
             
-            # Extract content
-            content = response.choices[0].message.content if response.choices else ""
+            # Extract and validate content
+            raw_content = response.choices[0].message.content.strip()
+            logger.debug(f"OpenAI Raw Response Content: {raw_content}")
             
-            # Calculate cost
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            total_tokens = response.usage.total_tokens
-            
-            # Calculate cost (per 1K tokens)
-            model_cost = self.get_model_cost(model_name)
-            cost = (total_tokens / 1000) * model_cost
-            
-            # Return standardized response
+            # Return response without JSON parsing
             return {
-                "content": content,
+                "content": raw_content,
                 "model": model_name,
                 "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "cost": cost
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "cost": response.usage.total_tokens / 1000 * self.get_model_cost(model_name)
                 }
             }
             
@@ -141,19 +133,7 @@ class OpenAIProvider(ProviderPlugin):
         tool_choice: str = "auto",
         **kwargs
     ) -> Dict:
-        """Generate a response from GPT that may include tool calls.
-        
-        Args:
-            prompt: The prompt to send to the model
-            tools: The tools available to the model
-            model: The specific model to use
-            temperature: The sampling temperature
-            tool_choice: How to choose tools ("none", "auto", "required")
-            **kwargs: Additional model-specific parameters
-            
-        Returns:
-            Dict: The response data
-        """
+        """Generate a response that may include tool calls using the Chat Completions API."""
         if not self.client:
             raise ValueError("OpenAI provider not initialized")
         
@@ -161,100 +141,90 @@ class OpenAIProvider(ProviderPlugin):
         model_name = model if model in self.supported_models else self.default_model
         
         try:
-            # Prepare messages format
-            messages = [{"role": "user", "content": prompt}]
+            # Prepare messages for tool usage
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You must follow the exact output format specified in the prompt. When using tools, follow the tool-specific format requirements."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
             
-            # Map tool_choice to OpenAI format
-            openai_tool_choice = tool_choice
-            if tool_choice == "required" and tools:
-                # If required, specify first tool
-                openai_tool_choice = {"type": "function", "function": {"name": tools[0]["function"]["name"]}}
+            # Prepare base request parameters
+            params = {
+                "model": model_name,
+                "messages": messages,
+                "temperature": temperature
+            }
+            
+            # Add tools configuration
+            if tools:
+                params["tools"] = tools
+                params["tool_choice"] = tool_choice if tool_choice in ["none", "auto"] else "auto"
+                if tool_choice == "required" and tools:
+                    params["tool_choice"] = {"type": "function", "function": {"name": tools[0]["function"]["name"]}}
+            
+            # Filter kwargs to only include supported parameters
+            supported_params = {
+                "frequency_penalty", "logit_bias", "max_tokens",
+                "n", "presence_penalty", "stop", "stream", 
+                "temperature", "top_p", "user"
+            }
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+            params.update(filtered_kwargs)
             
             # Make the API call
-            response = await self.client.chat.completions.create(
-                model=model_name,
-                messages=messages,
-                temperature=temperature,
-                tools=tools if tools and tool_choice != "none" else None,
-                tool_choice=openai_tool_choice if tool_choice != "none" else "none",
-                **kwargs
-            )
+            response = await self.client.chat.completions.create(**params)
             
-            # Extract content
-            message = response.choices[0].message if response.choices else None
-            content = message.content if message else ""
+            # Extract response content and tool calls
+            message = response.choices[0].message
+            raw_content = message.content.strip() if message.content else "{}"
             
-            # Extract tool calls
+            # Extract tool calls if present
             tool_calls = []
-            if message and message.tool_calls:
-                for tool_call in message.tool_calls:
-                    # Convert to standard format
+            if hasattr(message, "tool_calls") and message.tool_calls:
+                for call in message.tool_calls:
                     tool_calls.append({
-                        'id': tool_call.id,
-                        'type': 'function',
-                        'function': {
-                            'name': tool_call.function.name,
-                            'arguments': tool_call.function.arguments
+                        "id": call.id,
+                        "type": "function",
+                        "function": {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments
                         }
                     })
             
-            # Calculate cost
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
-            total_tokens = response.usage.total_tokens
-            
-            # Calculate cost (per 1K tokens)
-            model_cost = self.get_model_cost(model_name)
-            cost = (total_tokens / 1000) * model_cost
-            
-            # Return standardized response
             return {
-                "content": content if not tool_calls else None,
+                "content": raw_content,
                 "tool_calls": tool_calls,
-                "model": model_name,
-                "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "cost": cost
+                    "model": model_name,
+                    "usage": {
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                        "total_tokens": response.usage.total_tokens,
+                        "cost": response.usage.total_tokens / 1000 * self.get_model_cost(model_name)
+                    }
                 }
-            }
             
         except Exception as e:
             logger.error(f"Error generating response with tools from OpenAI: {e}")
             raise
     
     async def execute(self, **kwargs) -> Dict:
-        """Execute the provider's primary function (generate).
-        
-        Args:
-            **kwargs: Arguments for the generate method
-            
-        Returns:
-            Dict: The generation result
-        """
+        """Execute the provider's primary function (generate)."""
         if "tools" in kwargs:
             return await self.generate_with_tools(**kwargs)
         else:
             return await self.generate(**kwargs)
     
     def get_default_model(self) -> str:
-        """Get the default model for this provider.
-        
-        Returns:
-            str: The name of the default model
-        """
+        """Get the default model for this provider."""
         return self.default_model
     
     def get_model_cost(self, model: str) -> float:
-        """Get the cost per 1K tokens for a specific model.
-        
-        Args:
-            model: The model name
-            
-        Returns:
-            float: The cost per 1K tokens
-        """
+        """Get the cost per 1K tokens for a specific model."""
         return self.model_costs.get(model, 0.010)
     
     async def cleanup(self) -> None:

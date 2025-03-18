@@ -16,277 +16,247 @@ class AIPlanner:
     
     def __init__(self):
         """Initialize the AI planner."""
-        # Get available models from configured providers
-        self.available_models = self._get_available_models()
         self.model_capabilities = config.get_value("model_capabilities", {})
         
-    def _get_available_models(self) -> Dict[str, List[str]]:
-        """Get available models from providers with valid API keys."""
-        available = {}
-        for provider_name, provider_config in config.providers.items():
-            if provider_name == "default":
-                continue
-                
-            # Check if provider has API key in environment
-            api_key = provider_config.get("api_key", "")
-            if isinstance(api_key, str) and api_key.startswith("$"):
-                env_var = api_key[1:]
-                api_key = os.environ.get(env_var)
-            
-            if api_key:
-                available[provider_name] = provider_config.get("models", [])
-                logger.info(f"Provider {provider_name} available with {len(available[provider_name])} models")
-        
-        return available
-    
-    async def get_analysis_model(self, provider: Any) -> Optional[str]:
-        """Get the best model for task analysis based on capabilities.
-        
-        Args:
-            provider: Provider plugin instance
-            
-        Returns:
-            Optional[str]: Best model for analysis, or None if none available
-        """
-        try:
-            # Get models with reasoning capabilities
-            reasoning_models = self.model_capabilities.get("reasoning", [])
-            if not reasoning_models:
-                logger.warning("No models configured for reasoning capabilities")
-                return None
-                
-            # Score each model based on capabilities
-            model_scores = {}
-            for model in reasoning_models:
-                if not any(model in models for models in self.available_models.values()):
-                    continue
-                    
-                # Get model capabilities from provider
-                capabilities = await provider.get_model_capabilities(model)
-                
-                # Score based on relevant capabilities
-                score = 0
-                if capabilities.get("context_length", 0) >= 8000:  # Prefer models with larger context
-                    score += 2
-                if capabilities.get("function_calling", False):  # Prefer models with function calling
-                    score += 2
-                if capabilities.get("json_mode", False):  # Prefer models with JSON output
-                    score += 1
-                    
-                model_scores[model] = score
-            
-            if not model_scores:
-                return None
-                
-            # Return model with highest score
-            return max(model_scores.items(), key=lambda x: x[1])[0]
-            
-        except Exception as e:
-            logger.error(f"Error getting analysis model: {e}")
-            return None
-    
-    def _create_analysis_prompt(self, task: str, available_plugins: List[str]) -> str:
-        """Create the prompt for task analysis."""
-        # Flatten available models into a list
+    def _create_orchestration_prompt(self, task: str, available_models: Dict[str, List[str]], available_plugins: List[str]) -> str:
+        """Create the prompt for task orchestration and planning."""
+        # Format available models by provider
         model_list = []
-        for provider, models in self.available_models.items():
-            model_list.extend(models)
+        for provider, models in available_models.items():
+            model_list.append(f"{provider}: {', '.join(models)}")
+            
+        # Create a clear model specification format
+        model_format = "provider_name/model_name (e.g. " + next(iter(available_models.items()))[0] + "/" + next(iter(available_models.values()))[0] + ")"
         
         return f'''
-Analyze this task in detail: "{task}"
+You will create a master plan to complete this task: "{task}"
 
-Available Models:
-{json.dumps(model_list, indent=2)}
+Available Models by Provider:
+{os.linesep.join(model_list)}
 
 Available Plugins:
-{json.dumps(available_plugins, indent=2)}
+{', '.join(available_plugins)}
 
-Analyze and provide a structured execution plan that considers:
+Create a complete execution plan that:
+1. Uses appropriate models for each subtask
+2. Leverages available plugins effectively
+3. Defines clear dependencies between subtasks
 
-1. Task Analysis:
-- Primary task category and subcategories
-- Required capabilities and skills
-- Complexity assessment
-- Potential challenges or constraints
+Important Model Selection:
+- Always specify models as: {model_format}
+- Only use models from the available list above
+- Each step must have a valid model assigned
 
-2. Resource Requirements:
-- Required model capabilities
-- Necessary plugins and tools
-- External dependencies
-- Memory or processing needs
+Return in this exact format:
 
-3. Execution Strategy:
-- Parallel vs sequential processing opportunities
-- Dependencies between subtasks
-- Error handling considerations
-- Performance optimization opportunities
+TASK TYPE: [primary category of task]
 
-Output a comprehensive JSON plan with this structure:
-{{
-    "analysis": {{
-        "task_type": "primary category of task",
-        "categories": ["relevant", "task", "categories"],
-        "capabilities_needed": ["capability1", "capability2"],
-        "complexity_assessment": {{
-            "level": "simple|moderate|complex",
-            "factors": ["factor1", "factor2"]
-        }},
-        "challenges": ["challenge1", "challenge2"]
-    }},
-    "resources": {{
-        "required_capabilities": ["capability1", "capability2"],
-        "suggested_models": ["model1", "model2"],
-        "required_plugins": ["plugin1", "plugin2"],
-        "memory_requirements": "low|medium|high",
-        "external_dependencies": ["dependency1", "dependency2"]
-    }},
-    "execution_plan": {{
-        "parallel_execution": boolean,
-        "steps": [
-            {{
-                "id": "step-1",
-                "description": "detailed step description",
-                "model": "specific model name from available list",
-                "plugins": ["required plugin names"],
-                "requires_ui": boolean,
-                "expected_output": "output type",
-                "error_handling": {{
-                    "retry_strategy": "none|simple|exponential",
-                    "max_retries": number,
-                    "fallback_action": "description of fallback"
-                }},
-                "dependencies": ["step-ids this step depends on"],
-                "estimated_complexity": "low|medium|high"
-            }}
-        ]
-    }}
-}}
+PLUGINS NEEDED: [comma-separated list of required plugins]
+
+EXECUTION MODE: [sequential or parallel]
+
+STEP 1:
+Description: [clear description of subtask]
+Model: [provider_name/model_name]
+Plugins: [plugins needed for this step]
+Dependencies: none
+Output: [what this step produces]
+
+STEP 2:
+Description: [clear description of subtask]
+Model: [provider_name/model_name]
+Plugins: [plugins needed for this step]
+Dependencies: [step numbers this depends on, or "none"]
+Output: [what this step produces]
 
 Important:
-1. Only reference available models and plugins
-2. Break complex operations into atomic steps
-3. Include error handling for critical steps
-4. Specify clear dependencies between steps
-5. Consider resource efficiency and parallel execution opportunities
+1. Only use models actually available above
+2. Break complex tasks into clear steps
+3. Use appropriate plugins for each step
+4. Define clear dependencies
+5. Keep steps focused and specific
+6. Don't include sections outside this format
 '''
-    
-    async def create_execution_plan(self, task: str, provider: Any, cache: Optional[Any] = None) -> Dict[str, Any]:
-        """Create an execution plan for a task.
+
+    def _validate_model(self, model_str: str, available_models: Dict[str, List[str]], provider: Any) -> str:
+        """Validate and normalize model specification.
         
         Args:
-            task: The task to analyze
-            provider: Provider plugin instance
+            model_str: Model specification (provider/model or just model)
+            available_models: Dictionary of available models
+            provider: Default provider instance
             
         Returns:
-            Dict: Execution plan with steps
-            
-        Raises:
-            AIPlannerException: If planning fails
+            str: Normalized model specification (provider/model)
         """
         try:
-            # Get best model for analysis with caching
-            cache_key = f"analysis_model_{provider.__class__.__name__}"
-            if cache:
-                model = cache.get(cache_key)
+            if '/' in model_str:
+                provider_name, model_name = model_str.split('/')
+                if (provider_name in available_models and 
+                    model_name in available_models[provider_name]):
+                    return f"{provider_name}/{model_name}"
+            else:
+                # Try to find model in default provider
+                default_name = provider.__class__.__name__
+                if model_str in available_models.get(default_name, []):
+                    return f"{default_name}/{model_str}"
+                
+                # Try to find model in any provider
+                for p_name, models in available_models.items():
+                    if model_str in models:
+                        return f"{p_name}/{model_str}"
             
-            if not model:
-                model = await self.get_analysis_model(provider)
-                if cache:
-                    cache.put(cache_key, model)
-            if not model:
-                raise AIPlannerException("No suitable model available for task analysis")
+            # If no valid model found, return default
+            return f"{provider.__class__.__name__}/{provider.get_default_model()}"
             
+        except Exception as e:
+            logger.warning(f"Error validating model {model_str}: {e}")
+            return f"{provider.__class__.__name__}/{provider.get_default_model()}"
+
+    async def create_execution_plan(self, task: str, provider: Any, available_models: Dict[str, List[str]], cache: Optional[Any] = None) -> Dict[str, Any]:
+        """Create an execution plan for a task using available models."""
+        try:
+            if not available_models:
+                logger.warning("No available models provided, using default provider models only")
+                try:
+                    models = await provider.get_available_models()
+                    available_models = {provider.__class__.__name__: models}
+                except Exception as e:
+                    logger.error(f"Error getting default provider models: {e}")
+                    raise AIPlannerException("No models available for planning")
+
             # Get available plugins
             available_plugins = list(config.get_value("plugins.active", {}).keys())
             
-            # Create detailed analysis prompt
-            prompt = self._create_analysis_prompt(task, available_plugins)
+            # Create orchestration prompt
+            prompt = self._create_orchestration_prompt(task, available_models, available_plugins)
             
-            # Get analysis from model
+            # Get plan from default provider
             response = await provider.generate(
                 prompt=prompt,
-                model=model,
-                temperature=0.7,
-                response_format={"type": "json"}
+                model=provider.get_default_model(),
+                temperature=0.7
             )
             
-            # Parse and enhance plan
+            logger.info("\n" + "="*50)
+            logger.info("CREATING EXECUTION PLAN")
+            logger.info("="*50)
+            logger.info(f"Task: {task[:200]}...")
+            
+            # Initialize plan
+            plan = {
+                "analysis": {
+                    "task_type": "default"
+                },
+                "execution_plan": {
+                    "parallel_execution": False,
+                    "steps": []
+                }
+            }
+            
+            # Parse the response
+            content = response.get("content", "")
+            if isinstance(content, dict):
+                content = str(content)
+            
             try:
-                plan = json.loads(response.get("content", "{}"))
-                if not isinstance(plan, dict):
-                    raise ValueError("Invalid plan format")
+                # Split into sections
+                sections = content.strip().split('\n\n')
                 
-                # Validate and enhance plan sections
-                required_sections = ["analysis", "resources", "execution_plan"]
-                if not all(section in plan for section in required_sections):
-                    raise ValueError(f"Plan missing required sections: {required_sections}")
+                for section in sections:
+                    section = section.strip()
+                    if not section:
+                        continue
+                        
+                    if section.startswith('TASK TYPE:'):
+                        task_type = section.split(':', 1)[1].strip()
+                        if task_type:
+                            plan["analysis"]["task_type"] = task_type
+                            
+                    elif section.startswith('PLUGINS NEEDED:'):
+                        plugins = section.split(':', 1)[1].strip()
+                        if plugins.lower() != 'none':
+                            plan["execution_plan"]["required_plugins"] = [p.strip() for p in plugins.split(',')]
+                            
+                    elif section.startswith('EXECUTION MODE:'):
+                        mode = section.split(':', 1)[1].strip().lower()
+                        plan["execution_plan"]["parallel_execution"] = "parallel" in mode
+                        
+                    elif section.startswith('STEP '):
+                        try:
+                            # Parse step information
+                            lines = section.split('\n')
+                            step_num = lines[0].split()[1].rstrip(':')
+                            
+                            # Initialize step
+                            step = {
+                                "id": f"step-{step_num}",
+                                "description": f"Step {step_num}",
+                                "model": None,  # Will be set after validation
+                                "plugins": [],
+                                "dependencies": [],
+                                "expected_output": "completion"
+                            }
+                            
+                            # Parse step details
+                            for line in lines[1:]:
+                                if ':' not in line:
+                                    continue
+                                    
+                                key, value = line.split(':', 1)
+                                key = key.strip().lower()
+                                value = value.strip()
+                                
+                                if key == 'description' and value:
+                                    step["description"] = value
+                                elif key == 'model' and value:
+                                    # Validate and normalize model specification
+                                    step["model"] = self._validate_model(value, available_models, provider)
+                                elif key == 'plugins' and value and value.lower() != 'none':
+                                    plugins = [p.strip() for p in value.split(',')]
+                                    step["plugins"] = [p for p in plugins if p in available_plugins]
+                                elif key == 'dependencies' and value and value.lower() != 'none':
+                                    step["dependencies"] = [f"step-{d.strip()}" for d in value.split(',')]
+                                elif key == 'output' and value:
+                                    step["expected_output"] = value
+                            
+                            # Ensure step has a valid model
+                            if not step["model"]:
+                                step["model"] = f"{provider.__class__.__name__}/{provider.get_default_model()}"
+                                
+                            plan["execution_plan"]["steps"].append(step)
+                            
+                        except Exception as step_error:
+                            logger.warning(f"Error parsing step in section: {section}. Error: {step_error}")
+                            continue
                 
-                # Validate execution steps
-                if "steps" in plan.get("execution_plan", {}):
-                    for step in plan["execution_plan"]["steps"]:
-                        required_fields = [
-                            "id", "description", "model", "plugins",
-                            "requires_ui", "expected_output", "error_handling",
-                            "dependencies", "estimated_complexity"
-                        ]
-                        if not all(field in step for field in required_fields):
-                            raise ValueError(f"Step missing required fields: {required_fields}")
+                # Validate plan has steps
+                if not plan["execution_plan"]["steps"]:
+                    raise AIPlannerException("No valid steps found in execution plan")
                 
-                # Enhance plan with performance estimates
+                # Add performance estimates
+                step_count = len(plan["execution_plan"]["steps"])
                 plan["performance_estimates"] = {
-                    "expected_duration": "short|medium|long",
-                    "resource_intensity": "low|medium|high",
-                    "parallelization_potential": plan.get("execution_plan", {}).get("parallel_execution", False)
+                    "expected_duration": "short" if step_count <= 3 else "medium" if step_count <= 6 else "long",
+                    "resource_intensity": "low" if step_count <= 3 else "medium" if step_count <= 6 else "high",
+                    "parallelization_potential": plan["execution_plan"]["parallel_execution"]
                 }
                 
-                logger.info(f"Created enhanced execution plan with {len(plan.get('execution_plan', {}).get('steps', []))} steps")
+                # Log execution plan
+                logger.info("\nEXECUTION PLAN CREATED:")
+                logger.info(f"Steps: {step_count}")
+                logger.info("Model Assignments:")
+                for step in plan["execution_plan"]["steps"]:
+                    logger.info(f"  Step {step['id']}: {step['model']}")
+                logger.info(f"Mode: {plan['execution_plan'].get('parallel_execution', False)}")
+                logger.info("="*50 + "\n")
+                
                 return plan
                 
-            except json.JSONDecodeError as e:
-                raise AIPlannerException(f"Failed to parse plan: {e}")
-            except ValueError as e:
-                raise AIPlannerException(f"Invalid plan structure: {e}")
-                
+            except Exception as parse_error:
+                logger.error(f"Error parsing plan: {parse_error}")
+                raise AIPlannerException(f"Failed to parse execution plan: {parse_error}")
+            
         except Exception as e:
             logger.error(f"Error creating execution plan: {e}")
             raise AIPlannerException(f"Planning failed: {e}")
-    
-    def find_provider_for_model(self, model: str) -> Optional[str]:
-        """Find provider that has the specified model.
-        
-        Args:
-            model: Model name to find
-            
-        Returns:
-            Optional[str]: Provider name if found, None otherwise
-        """
-        for provider, models in self.available_models.items():
-            if model in models:
-                return provider
-        return None
-    
-    def find_fallback_model(self, original_model: str) -> Optional[tuple]:
-        """Find fallback model with similar capabilities.
-        
-        Args:
-            original_model: Original model name
-            
-        Returns:
-            Optional[tuple]: (provider, model) if found, None otherwise
-        """
-        # Find capability category of original model
-        category = None
-        for cap, models in self.model_capabilities.items():
-            if original_model in models:
-                category = cap
-                break
-        
-        if category:
-            # Try other models with same capability
-            for model in self.model_capabilities[category]:
-                if model != original_model:
-                    provider = self.find_provider_for_model(model)
-                    if provider:
-                        return (provider, model)
-        
-        return None

@@ -5,7 +5,6 @@ import logging
 import pkgutil
 from pathlib import Path
 from typing import Dict, List, Optional, Type, Set
-
 from plugins.base import Plugin, PluginCategory
 
 logger = logging.getLogger("manusprime.registry")

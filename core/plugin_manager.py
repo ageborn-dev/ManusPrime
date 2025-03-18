@@ -27,23 +27,26 @@ class PluginManager:
             self._lock = asyncio.Lock()
     
     async def initialize(self) -> bool:
-        """Initialize the plugin manager and activate plugins defined in config.
-        
-        Returns:
-            bool: True if initialization was successful
-        """
+        """Initialize the plugin manager and activate plugins defined in config."""
         if self._initialized:
             return True
-            
-        async with self._lock:
-            if self._initialized:  # Double-check inside lock
-                return True
                 
+        async with self._lock:
+            if self._initialized:
+                return True
+                    
             try:
                 # Discover available plugins
                 registry.discover_plugins()
                 
-                # Activate plugins based on configuration
+                default_provider = config.default_provider
+                logger.info(f"Explicitly activating default provider: {default_provider}")
+                provider_config = config.get_provider_config(default_provider)
+                provider = await registry.activate_plugin(default_provider, provider_config)
+                if not provider:
+                    logger.error(f"Failed to activate default provider: {default_provider}")
+                
+                # Activate other plugins based on configuration
                 activated_count = 0
                 for category, plugin_name in config.active_plugins.items():
                     if not plugin_name:
@@ -57,7 +60,7 @@ class PluginManager:
                 logger.info(f"Activated {activated_count} plugins from configuration")
                 self._initialized = True
                 return True
-                
+                    
             except Exception as e:
                 logger.error(f"Error initializing plugin manager: {e}")
                 return False

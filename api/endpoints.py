@@ -15,6 +15,9 @@ from core.agent import ManusPrime
 from utils.monitor import resource_monitor
 from utils.logger import logger
 
+from plugins.registry import registry
+from plugins.base import PluginCategory
+
 router = APIRouter()
 
 # Store task event queues
