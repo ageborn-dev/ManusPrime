@@ -230,6 +230,14 @@ class ProviderPlugin(Plugin):
             float: The cost per 1K tokens
         """
         pass
+        
+    async def get_available_models(self) -> List[str]:
+        """Get list of available models for this provider.
+        
+        Returns:
+            List[str]: List of supported model names
+        """
+        return self.supported_models
 
 # Add the missing BaseProvider class
 class BaseProvider(ProviderPlugin):
