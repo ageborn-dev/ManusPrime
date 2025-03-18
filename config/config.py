@@ -42,13 +42,11 @@ class Config:
         """Find the configuration file in standard locations."""
         # Get the directory of the current module
         current_dir = Path(__file__).parent.absolute()
-        project_root = current_dir.parent.parent  # Go up two levels from config dir
+        project_root = current_dir.parent.parent
         
         possible_locations = [
-            # Look in the module directory first (same dir as this file)
+
             current_dir / "default.toml",
-            
-            # Then try standard locations relative to project root
             project_root / "default.toml",
             project_root / "config" / "default.toml",
             project_root / "manusprime" / "config" / "default.toml",
@@ -62,13 +60,8 @@ class Config:
             if location.exists():
                 logger.info(f"Using configuration file: {location}")
                 return location
-        
-        # If all else fails, try an explicit path to where we think it might be
-        explicit_path = Path("D:/Visual_Code/manusprime-new/manusprime/config/default.toml")
-        if explicit_path.exists():
-            logger.info(f"Using configuration file: {explicit_path}")
-            return explicit_path
-            
+
+           
         # Build a better error message showing where we looked
         locations_str = "\n - ".join([str(loc) for loc in possible_locations])
         raise FileNotFoundError(f"No configuration file (default.toml) found. Looked in:\n - {locations_str}")
