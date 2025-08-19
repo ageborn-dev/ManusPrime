@@ -4,8 +4,10 @@ import json
 from typing import Dict, List, Optional, Any, ClassVar
 
 from openai import AsyncOpenAI
+from openai._exceptions import APIError, RateLimitError, APITimeoutError, APIConnectionError
 from plugins.base import Plugin, PluginCategory, ProviderPlugin
 from config import config
+from utils.retry import retry_on_failure, ProviderError, RateLimitError as RetryRateLimitError, ServiceUnavailableError, AuthenticationError
 
 logger = logging.getLogger("manusprime.plugins.openai")
 
@@ -45,7 +47,11 @@ class OpenAIProvider(ProviderPlugin):
                 return False
             
             # Initialize client
-            self.client = AsyncOpenAI(api_key=self.api_key, base_url=base_url)
+            self.client = AsyncOpenAI(
+                api_key=self.api_key, 
+                base_url=base_url,
+                timeout=30.0  # Set reasonable timeout
+            )
             logger.info("OpenAI provider initialized successfully")
             return True
             
@@ -53,6 +59,57 @@ class OpenAIProvider(ProviderPlugin):
             logger.error(f"Error initializing OpenAI provider: {e}")
             return False
     
+    async def has_valid_api_key(self) -> bool:
+        """Check if the API key is valid.
+        
+        Returns:
+            bool: True if API key is valid
+        """
+        if not self.api_key or not self.client:
+            return False
+        
+        try:
+            # Make a minimal test request
+            await self.client.chat.completions.create(
+                model=self.default_model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"OpenAI API key validation failed: {e}")
+            return False
+    
+    def _handle_openai_error(self, error: Exception) -> Exception:
+        """Convert OpenAI errors to our custom exceptions.
+        
+        Args:
+            error: The original OpenAI error
+            
+        Returns:
+            Exception: Converted exception
+        """
+        if isinstance(error, RateLimitError):
+            return RetryRateLimitError(f"OpenAI rate limit exceeded: {error}")
+        elif isinstance(error, APITimeoutError):
+            return ServiceUnavailableError(f"OpenAI API timeout: {error}")
+        elif isinstance(error, APIConnectionError):
+            return ServiceUnavailableError(f"OpenAI connection error: {error}")
+        elif isinstance(error, APIError):
+            if error.status_code == 401:
+                return AuthenticationError(f"OpenAI authentication failed: {error}")
+            elif error.status_code == 503:
+                return ServiceUnavailableError(f"OpenAI service unavailable: {error}")
+            else:
+                return ProviderError(f"OpenAI API error: {error}")
+        else:
+            return error
+    
+    @retry_on_failure(
+        max_attempts=3,
+        base_delay=1.0,
+        exceptions=(RetryRateLimitError, ServiceUnavailableError, ConnectionError, TimeoutError)
+    )
     async def generate(
         self,
         prompt: str,
@@ -63,7 +120,7 @@ class OpenAIProvider(ProviderPlugin):
     ) -> Dict:
         """Generate a response using the Chat Completions API."""
         if not self.client:
-            raise ValueError("OpenAI provider not initialized")
+            raise ProviderError("OpenAI provider not initialized")
         
         # Validate and select model
         model_name = model if model in self.supported_models else self.default_model
@@ -121,9 +178,16 @@ class OpenAIProvider(ProviderPlugin):
             }
             
         except Exception as e:
-            logger.error(f"Error generating response from OpenAI: {e}")
-            raise
+            # Convert to our custom exceptions
+            converted_error = self._handle_openai_error(e)
+            logger.error(f"Error generating response from OpenAI: {converted_error}")
+            raise converted_error
     
+    @retry_on_failure(
+        max_attempts=3,
+        base_delay=1.0,
+        exceptions=(RetryRateLimitError, ServiceUnavailableError, ConnectionError, TimeoutError)
+    )
     async def generate_with_tools(
         self,
         prompt: str,
@@ -135,7 +199,7 @@ class OpenAIProvider(ProviderPlugin):
     ) -> Dict:
         """Generate a response that may include tool calls using the Chat Completions API."""
         if not self.client:
-            raise ValueError("OpenAI provider not initialized")
+            raise ProviderError("OpenAI provider not initialized")
         
         # Validate and select model
         model_name = model if model in self.supported_models else self.default_model
@@ -199,25 +263,41 @@ class OpenAIProvider(ProviderPlugin):
             return {
                 "content": raw_content,
                 "tool_calls": tool_calls,
-                    "model": model_name,
-                    "usage": {
-                        "prompt_tokens": response.usage.prompt_tokens,
-                        "completion_tokens": response.usage.completion_tokens,
-                        "total_tokens": response.usage.total_tokens,
-                        "cost": response.usage.total_tokens / 1000 * self.get_model_cost(model_name)
-                    }
+                "model": model_name,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "cost": response.usage.total_tokens / 1000 * self.get_model_cost(model_name)
                 }
+            }
             
         except Exception as e:
-            logger.error(f"Error generating response with tools from OpenAI: {e}")
-            raise
+            # Convert to our custom exceptions
+            converted_error = self._handle_openai_error(e)
+            logger.error(f"Error generating response with tools from OpenAI: {converted_error}")
+            raise converted_error
     
     async def execute(self, **kwargs) -> Dict:
         """Execute the provider's primary function (generate)."""
-        if "tools" in kwargs:
-            return await self.generate_with_tools(**kwargs)
-        else:
-            return await self.generate(**kwargs)
+        try:
+            if "tools" in kwargs:
+                return await self.generate_with_tools(**kwargs)
+            else:
+                return await self.generate(**kwargs)
+        except Exception as e:
+            logger.error(f"Error in OpenAI provider execute: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "model": kwargs.get("model", self.default_model),
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "cost": 0.0
+                }
+            }
     
     def get_default_model(self) -> str:
         """Get the default model for this provider."""
@@ -229,4 +309,12 @@ class OpenAIProvider(ProviderPlugin):
     
     async def cleanup(self) -> None:
         """Clean up resources used by the provider."""
-        self.client = None
+        if self.client:
+            try:
+                await self.client.close()
+            except Exception as e:
+                logger.warning(f"Error closing OpenAI client: {e}")
+            finally:
+                self.client = None
+                logger.info("OpenAI client closed")
+                

@@ -204,6 +204,12 @@ body {
     border-color: var(--primary-color);
 }
 
+#prompt-input:disabled {
+    background-color: #f5f5f5;
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
 #submit-button {
     background-color: var(--primary-color);
     color: white;
@@ -213,10 +219,41 @@ body {
     font-weight: 500;
     cursor: pointer;
     transition: background-color 0.1s ease-in-out;
+    min-width: 80px;
 }
 
-#submit-button:hover {
+#submit-button:hover:not(:disabled) {
     background-color: var(--primary-dark);
+}
+
+#submit-button:disabled {
+    background-color: #9ca3af;
+    cursor: not-allowed;
+}
+
+#submit-button.loading {
+    position: relative;
+}
+
+#submit-button.loading::after {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    margin: auto;
+    border: 2px solid transparent;
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
 
 /* Task actions */
@@ -252,35 +289,94 @@ body {
     border-left: 3px solid var(--primary-color);
 }
 
-/* Add this to your notification styles if not already present */
-.notification-success {
-    background-color: var(--success-color);
-    color: white;
+/* Loading states */
+.loading-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 2rem;
+    text-align: center;
 }
 
-/* Animation for notifications */
-.notification {
+.loading-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid var(--border-color);
+    border-top: 3px solid var(--primary-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+}
+
+.loading-text {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: var(--text-color);
     margin-bottom: 0.5rem;
-    padding: 0.75rem 1rem;
+}
+
+.loading-subtext {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+}
+
+/* Error states */
+.error-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 2rem;
+    text-align: center;
+}
+
+.error-icon {
+    font-size: 3rem;
+    margin-bottom: 1rem;
+}
+
+.error-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--error-color);
+    margin-bottom: 0.5rem;
+}
+
+.error-message {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    margin-bottom: 1.5rem;
+    max-width: 400px;
+}
+
+.retry-button {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
     border-radius: var(--border-radius);
-    box-shadow: var(--shadow-lg);
-    animation: slide-in 0.3s ease-out;
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.1s ease-in-out;
 }
 
-.notification.fade-out {
-    animation: fade-out 0.3s ease-in forwards;
+.retry-button:hover {
+    background-color: var(--primary-dark);
 }
 
-@keyframes slide-in {
-    from { transform: translateY(-20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+.retry-button-small {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 0.25rem;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+    margin-top: 0.5rem;
 }
 
-@keyframes fade-out {
-    from { opacity: 1; }
-    to { opacity: 0; }
-}
-
+/* Notifications */
 #notification-container {
     position: fixed;
     top: 1rem;
@@ -289,6 +385,78 @@ body {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
+    gap: 0.5rem;
+}
+
+.notification {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-lg);
+    animation: slide-in 0.3s ease-out;
+    max-width: 400px;
+    min-width: 250px;
+}
+
+.notification-success {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.notification-error {
+    background-color: var(--error-color);
+    color: white;
+}
+
+.notification-warning {
+    background-color: var(--warning-color);
+    color: white;
+}
+
+.notification-info {
+    background-color: var(--info-color);
+    color: white;
+}
+
+.notification-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.notification-message {
+    flex: 1;
+    font-size: 0.9rem;
+}
+
+.notification-close {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0;
+    opacity: 0.8;
+    flex-shrink: 0;
+}
+
+.notification-close:hover {
+    opacity: 1;
+}
+
+.notification.fade-out {
+    animation: fade-out 0.3s ease-in forwards;
+}
+
+@keyframes slide-in {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
 }
 
 /* Message styles */
@@ -311,12 +479,93 @@ body {
     margin-right: 5rem;
 }
 
+.error-message {
+    background-color: #fef2f2;
+    border-left: 4px solid var(--error-color);
+    color: var(--error-color);
+}
+
 .message-content {
     white-space: pre-wrap;
 }
 
 .assistant-message .message-content {
     line-height: 1.6;
+}
+
+/* Resource usage */
+.resource-usage {
+    max-width: 800px;
+    margin: 0 auto 1.5rem;
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    background-color: #f8fafc;
+    border: 1px solid var(--border-color);
+    box-shadow: var(--shadow);
+}
+
+.resource-usage h3 {
+    font-size: 1rem;
+    margin-bottom: 0.75rem;
+    color: var(--text-color);
+}
+
+.resource-details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.resource-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.resource-label {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.resource-value {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.resource-value.cost-low {
+    color: var(--success-color);
+}
+
+.resource-value.cost-medium {
+    color: var(--warning-color);
+}
+
+.resource-value.cost-high {
+    color: var(--error-color);
+}
+
+.resource-models h4 {
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-color);
+}
+
+.model-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.model-tag {
+    background-color: var(--primary-color);
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 500;
 }
 
 .loading-indicator {
@@ -337,6 +586,49 @@ body {
     50% { opacity: 1; }
 }
 
+/* New task button */
+.new-task-button {
+    margin-top: 10px;
+    padding: 8px 16px;
+    background-color: var(--success-color);
+    color: white;
+    border: none;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    font-size: 14px;
+    width: 100%;
+    transition: background-color 0.1s ease-in-out;
+}
+
+.new-task-button:hover {
+    background-color: #059669;
+}
+
+.new-task-button:disabled {
+    background-color: #9ca3af;
+    cursor: not-allowed;
+}
+
+/* Empty states */
+.empty-list {
+    text-align: center;
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 2rem;
+}
+
+/* Code blocks */
+.code-block {
+    background-color: #f1f5f9;
+    border: 1px solid var(--border-color);
+    border-radius: 0.375rem;
+    padding: 1rem;
+    overflow-x: auto;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
 /* Responsive styles */
 @media (max-width: 768px) {
     .container {
@@ -346,5 +638,27 @@ body {
     .sidebar {
         width: 100%;
         max-height: 30vh;
+    }
+    
+    .message {
+        margin-left: 1rem;
+        margin-right: 1rem;
+    }
+    
+    .user-message {
+        margin-left: 1rem;
+    }
+    
+    .assistant-message {
+        margin-right: 1rem;
+    }
+    
+    .resource-usage {
+        margin-left: 1rem;
+        margin-right: 1rem;
+    }
+    
+    .resource-details {
+        grid-template-columns: 1fr;
     }
 }

@@ -1,4 +1,4 @@
-# utils/monitor.py
+
 import time
 import logging
 from typing import Dict, Optional, Any, Set, Callable
@@ -36,6 +36,16 @@ class ResourceMonitor:
         
         # Budget alert listeners
         self.budget_listeners: Set[Callable[[float, float], None]] = set()
+        
+        # Health metrics
+        self.health_metrics = {
+            "last_successful_call": None,
+            "consecutive_failures": 0,
+            "total_successful_calls": 0,
+            "total_failed_calls": 0,
+            "average_response_time": 0.0,
+            "last_error": None
+        }
     
     def start_session(self, task_id: Optional[str] = None, budget_limit: Optional[float] = None):
         """Start a new monitoring session.
@@ -113,18 +123,36 @@ class ResourceMonitor:
             logger.warning(f"Budget limit exceeded: ${self.total_cost:.4f} > ${self.budget_limit:.4f}")
             self._notify_budget_exceeded()
     
-    def track_api_call(self, success: bool = True):
+    def track_api_call(self, success: bool = True, response_time: Optional[float] = None, error: Optional[str] = None):
         """Track API call.
         
         Args:
             success: Whether the call was successful
+            response_time: Response time in seconds
+            error: Error message if failed
         """
         if not self.active_session:
             return
             
         self.api_calls += 1
-        if not success:
+        
+        if success:
+            self.health_metrics["total_successful_calls"] += 1
+            self.health_metrics["consecutive_failures"] = 0
+            self.health_metrics["last_successful_call"] = time.time()
+            
+            # Update average response time
+            if response_time is not None:
+                current_avg = self.health_metrics["average_response_time"]
+                total_calls = self.health_metrics["total_successful_calls"]
+                self.health_metrics["average_response_time"] = (
+                    (current_avg * (total_calls - 1) + response_time) / total_calls
+                )
+        else:
             self.api_errors += 1
+            self.health_metrics["total_failed_calls"] += 1
+            self.health_metrics["consecutive_failures"] += 1
+            self.health_metrics["last_error"] = error or "Unknown error"
     
     def start_timer(self, name: str):
         """Start a named timer.
@@ -168,12 +196,27 @@ class ResourceMonitor:
             "cost": self.total_cost,
             "api_calls": {
                 "total": self.api_calls,
-                "errors": self.api_errors
+                "errors": self.api_errors,
+                "success_rate": (self.api_calls - self.api_errors) / max(self.api_calls, 1)
             },
             "models": self.model_usage,
             "task_id": self.current_task_id,
-            "session_duration": time.time() - self.session_start_time if self.active_session else 0
+            "session_duration": time.time() - self.session_start_time if self.active_session else 0,
+            "health": self.health_metrics
         }
+    
+    def get_health_status(self) -> str:
+        """Get current health status.
+        
+        Returns:
+            str: Health status ("healthy", "degraded", "unhealthy")
+        """
+        if self.health_metrics["consecutive_failures"] >= 5:
+            return "unhealthy"
+        elif self.health_metrics["consecutive_failures"] >= 2:
+            return "degraded"
+        else:
+            return "healthy"
     
     def add_budget_listener(self, listener: Callable[[float, float], None]):
         """Add a budget limit listener.

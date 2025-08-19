@@ -11,6 +11,7 @@ from core.tool_manager import ToolManager
 from core.sandbox_manager import SandboxManager
 from core.ai_planner import AIPlanner
 from utils.cache import Cache
+from utils.retry import ProviderError, RateLimitError, ServiceUnavailableError
 
 logger = logging.getLogger("manusprime.core.execution_handler")
 
@@ -101,7 +102,7 @@ class ExecutionHandler:
                 # Execute steps (parallel if allowed)
                 if execution_plan.get("parallel_execution", False):
                     tasks = [
-                        self._execute_step(
+                        self._execute_step_with_error_handling(
                             step=step,
                             provider=provider,
                             context="\n".join([content_parts.get(dep, "") for dep in step.get("dependencies", [])]),
@@ -110,11 +111,11 @@ class ExecutionHandler:
                         )
                         for step in executable_steps
                     ]
-                    step_results = await asyncio.gather(*tasks)
+                    step_results = await asyncio.gather(*tasks, return_exceptions=True)
                 else:
                     step_results = []
                     for step in executable_steps:
-                        step_result = await self._execute_step(
+                        step_result = await self._execute_step_with_error_handling(
                             step=step,
                             provider=provider,
                             context="\n".join([content_parts.get(dep, "") for dep in step.get("dependencies", [])]),
@@ -129,21 +130,38 @@ class ExecutionHandler:
                     logger.info(f"Description: {step['description']}")
                     logger.info(f"Model Used: {step.get('model', 'default')}")
                     
-                    if 'content' in step_result:
-                        logger.info("\nStep Output:")
-                        logger.info("-" * 30)
-                        logger.info(step_result['content'])
-                        logger.info("-" * 30)
+                    # Handle exception results from gather
+                    if isinstance(step_result, Exception):
+                        logger.error(f"Step {step['id']} failed with exception: {step_result}")
+                        step_result = {
+                            "success": False,
+                            "content": f"Step failed: {str(step_result)}",
+                            "tokens": 0,
+                            "cost": 0.0,
+                            "error": str(step_result)
+                        }
                     
-                    logger.info("\nStep Metrics:")
-                    logger.info(f"Tokens Used: {step_result.get('tokens', 0)}")
-                    logger.info(f"Step Cost: ${step_result.get('cost', 0.0):.4f}")
+                    if step_result.get("success", True):  # Default to success if not specified
+                        if 'content' in step_result:
+                            logger.info("\nStep Output:")
+                            logger.info("-" * 30)
+                            logger.info(step_result['content'])
+                            logger.info("-" * 30)
+                        
+                        logger.info("\nStep Metrics:")
+                        logger.info(f"Tokens Used: {step_result.get('tokens', 0)}")
+                        logger.info(f"Step Cost: ${step_result.get('cost', 0.0):.4f}")
+                        
+                        content_parts[step["id"]] = step_result["content"]
+                        completed_steps.add(step["id"])
+                    else:
+                        # Step failed, but continue with error message
+                        logger.warning(f"Step {step['id']} failed: {step_result.get('error', 'Unknown error')}")
+                        content_parts[step["id"]] = f"[Error in {step['id']}: {step_result.get('error', 'Unknown error')}]"
+                        completed_steps.add(step["id"])  # Mark as completed to avoid infinite loop
                     
-                    step_number += 1
-                    
-                    content_parts[step["id"]] = step_result["content"]
-                    completed_steps.add(step["id"])
                     del pending_steps[step["id"]]
+                    step_number += 1
                     
                     # Update tracking
                     try:
@@ -161,7 +179,8 @@ class ExecutionHandler:
                             "model": step.get("model", "unknown"),
                             "tokens": step_result.get("tokens", 0),
                             "cost": step_result.get("cost", 0.0),
-                            "success": True
+                            "success": step_result.get("success", True),
+                            "error": step_result.get("error")
                         }
                     except Exception as e:
                         logger.error(f"Error updating step result: {e}")
@@ -223,6 +242,34 @@ class ExecutionHandler:
                 "step_results": {}
             }
     
+    async def _execute_step_with_error_handling(self,
+                                              step: Dict[str, Any],
+                                              provider: Any,
+                                              context: str = "",
+                                              available_models: Dict[str, List[str]] = None,
+                                              **kwargs) -> Dict[str, Any]:
+        """Execute a single step with comprehensive error handling."""
+        try:
+            return await self._execute_step(step, provider, context, available_models, **kwargs)
+        except (ProviderError, RateLimitError, ServiceUnavailableError) as e:
+            logger.error(f"Provider error in step {step.get('id', 'unknown')}: {e}")
+            return {
+                "success": False,
+                "content": f"Provider error: {str(e)}",
+                "tokens": 0,
+                "cost": 0.0,
+                "error": str(e)
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error in step {step.get('id', 'unknown')}: {e}")
+            return {
+                "success": False,
+                "content": f"Execution error: {str(e)}",
+                "tokens": 0,
+                "cost": 0.0,
+                "error": str(e)
+            }
+    
     async def _execute_step(self,
                           step: Dict[str, Any],
                           provider: Any,
@@ -266,6 +313,7 @@ Complete this specific task, ensuring the output matches the expected type: {ste
             content = response.get("content", "")
             
             result = {
+                "success": True,
                 "content": content,
                 "tokens": response.get("usage", {}).get("total_tokens", 0),
                 "cost": response.get("usage", {}).get("cost", 0.0)
@@ -273,27 +321,26 @@ Complete this specific task, ensuring the output matches the expected type: {ste
             
             # Handle UI requirements
             if any(p in ["browser", "sandbox"] for p in step.get("plugins", [])):
-                sandbox_result = await self.sandbox_manager.execute(
-                    result["content"],
-                    task_type="sandbox",
-                    task_id=kwargs.get("task_id"),
-                    maintain_session=True
-                )
-                
-                if sandbox_result["success"]:
-                    result["content"] = sandbox_result["enhanced_content"]
-                else:
-                    result["content"] += f"\n\n> **Note**: UI execution failed: {sandbox_result.get('error')}"
+                try:
+                    sandbox_result = await self.sandbox_manager.execute(
+                        result["content"],
+                        task_type="sandbox",
+                        task_id=kwargs.get("task_id"),
+                        maintain_session=True
+                    )
+                    
+                    if sandbox_result["success"]:
+                        result["content"] = sandbox_result["enhanced_content"]
+                    else:
+                        result["content"] += f"\n\n> **Note**: UI execution failed: {sandbox_result.get('error')}"
+                except Exception as sandbox_error:
+                    logger.warning(f"Sandbox execution failed: {sandbox_error}")
+                    result["content"] += f"\n\n> **Note**: UI execution failed: {str(sandbox_error)}"
             
             return result
             
         except Exception as e:
             logger.error(f"Error executing step: {e}")
             logger.error("Traceback:", exc_info=True)
-            
-            return {
-                "success": False,
-                "content": f"Error executing step: {str(e)}",
-                "tokens": 0,
-                "cost": 0.0
-            }
+            raise  # Re-raise to be handled by the wrapper
+        

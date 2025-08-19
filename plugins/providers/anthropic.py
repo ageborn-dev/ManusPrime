@@ -3,8 +3,10 @@ import logging
 from typing import Dict, List, Optional, Any, ClassVar
 
 from anthropic import AsyncAnthropic
+from anthropic._exceptions import APIError, RateLimitError, APITimeoutError, APIConnectionError
 from plugins.base import Plugin, PluginCategory, ProviderPlugin
 from config import config
+from utils.retry import retry_on_failure, ProviderError, RateLimitError as RetryRateLimitError, ServiceUnavailableError
 
 logger = logging.getLogger("manusprime.plugins.anthropic")
 
@@ -56,7 +58,11 @@ class AnthropicProvider(ProviderPlugin):
                 return False
             
             # Initialize client
-            self.client = AsyncAnthropic(api_key=self.api_key, base_url=base_url)
+            self.client = AsyncAnthropic(
+                api_key=self.api_key, 
+                base_url=base_url,
+                timeout=30.0  # Set reasonable timeout
+            )
             logger.info("Anthropic provider initialized successfully")
             return True
             
@@ -64,6 +70,55 @@ class AnthropicProvider(ProviderPlugin):
             logger.error(f"Error initializing Anthropic provider: {e}")
             return False
     
+    async def has_valid_api_key(self) -> bool:
+        """Check if the API key is valid.
+        
+        Returns:
+            bool: True if API key is valid
+        """
+        if not self.api_key or not self.client:
+            return False
+        
+        try:
+            # Make a minimal test request
+            await self.client.messages.create(
+                model=self.default_model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=1
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"Anthropic API key validation failed: {e}")
+            return False
+    
+    def _handle_anthropic_error(self, error: Exception) -> Exception:
+        """Convert Anthropic errors to our custom exceptions.
+        
+        Args:
+            error: The original Anthropic error
+            
+        Returns:
+            Exception: Converted exception
+        """
+        if isinstance(error, RateLimitError):
+            return RetryRateLimitError(f"Anthropic rate limit exceeded: {error}")
+        elif isinstance(error, APITimeoutError):
+            return ServiceUnavailableError(f"Anthropic API timeout: {error}")
+        elif isinstance(error, APIConnectionError):
+            return ServiceUnavailableError(f"Anthropic connection error: {error}")
+        elif isinstance(error, APIError):
+            if error.status_code == 503:
+                return ServiceUnavailableError(f"Anthropic service unavailable: {error}")
+            else:
+                return ProviderError(f"Anthropic API error: {error}")
+        else:
+            return error
+    
+    @retry_on_failure(
+        max_attempts=3,
+        base_delay=1.0,
+        exceptions=(RetryRateLimitError, ServiceUnavailableError, ConnectionError, TimeoutError)
+    )
     async def generate(
         self,
         prompt: str,
@@ -85,7 +140,7 @@ class AnthropicProvider(ProviderPlugin):
             Dict: The response data
         """
         if not self.client:
-            raise ValueError("Anthropic provider not initialized")
+            raise ProviderError("Anthropic provider not initialized")
         
         # Validate and select model
         model_name = model if model in self.supported_models else self.default_model
@@ -131,9 +186,16 @@ class AnthropicProvider(ProviderPlugin):
             }
             
         except Exception as e:
-            logger.error(f"Error generating response from Anthropic: {e}")
-            raise
+            # Convert to our custom exceptions
+            converted_error = self._handle_anthropic_error(e)
+            logger.error(f"Error generating response from Anthropic: {converted_error}")
+            raise converted_error
     
+    @retry_on_failure(
+        max_attempts=3,
+        base_delay=1.0,
+        exceptions=(RetryRateLimitError, ServiceUnavailableError, ConnectionError, TimeoutError)
+    )
     async def generate_with_tools(
         self,
         prompt: str,
@@ -157,7 +219,7 @@ class AnthropicProvider(ProviderPlugin):
             Dict: The response data
         """
         if not self.client:
-            raise ValueError("Anthropic provider not initialized")
+            raise ProviderError("Anthropic provider not initialized")
         
         # Validate and select model
         model_name = model if model in self.supported_models else self.default_model
@@ -230,8 +292,10 @@ class AnthropicProvider(ProviderPlugin):
             }
             
         except Exception as e:
-            logger.error(f"Error generating response with tools from Anthropic: {e}")
-            raise
+            # Convert to our custom exceptions
+            converted_error = self._handle_anthropic_error(e)
+            logger.error(f"Error generating response with tools from Anthropic: {converted_error}")
+            raise converted_error
     
     async def execute(self, **kwargs) -> Dict:
         """Execute the provider's primary function (generate).
@@ -242,10 +306,24 @@ class AnthropicProvider(ProviderPlugin):
         Returns:
             Dict: The generation result
         """
-        if kwargs.get("tools"):
-            return await self.generate_with_tools(**kwargs)
-        else:
-            return await self.generate(**kwargs)
+        try:
+            if kwargs.get("tools"):
+                return await self.generate_with_tools(**kwargs)
+            else:
+                return await self.generate(**kwargs)
+        except Exception as e:
+            logger.error(f"Error in Anthropic provider execute: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "model": kwargs.get("model", self.default_model),
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "cost": 0.0
+                }
+            }
     
     def get_default_model(self) -> str:
         """Get the default model for this provider.
@@ -268,4 +346,12 @@ class AnthropicProvider(ProviderPlugin):
     
     async def cleanup(self) -> None:
         """Clean up resources used by the provider."""
-        self.client = None
+        if self.client:
+            try:
+                await self.client.close()
+            except Exception as e:
+                logger.warning(f"Error closing Anthropic client: {e}")
+            finally:
+                self.client = None
+                logger.info("Anthropic provider resources cleaned up")
+                

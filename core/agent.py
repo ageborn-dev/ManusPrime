@@ -12,6 +12,7 @@ from core.tool_manager import ToolManager
 from core.sandbox_manager import SandboxManager
 from core.execution_handler import ExecutionHandler
 from core.ai_planner import AIPlanner, AIPlannerException
+from utils.retry import ProviderError, RateLimitError, ServiceUnavailableError
 
 logger = logging.getLogger("manusprime.agent")
 
@@ -79,10 +80,15 @@ class ManusPrime:
                 if plugin_name:
                     await plugin_manager.get_plugin(plugin_name)
             
-            # Ensure default provider is activated
+            # Ensure default provider is activated with validation
             default_provider = await plugin_manager.get_plugin(self.default_provider)
             if not default_provider:
                 raise ValueError(f"Default provider {self.default_provider} could not be activated")
+            
+            # Validate API key
+            if hasattr(default_provider, 'has_valid_api_key'):
+                if not await default_provider.has_valid_api_key():
+                    raise ValueError(f"Default provider {self.default_provider} has invalid API key")
             
             self.initialized = True
             logger.info("ManusPrime agent initialized successfully")
@@ -112,18 +118,30 @@ class ManusPrime:
             
             try:
                 provider = await plugin_manager.get_plugin(p_name)
-                if provider and await provider.has_valid_api_key():
+                if provider and hasattr(provider, 'has_valid_api_key'):
+                    if await provider.has_valid_api_key():
+                        models = await provider.get_available_models()
+                        if models:  # Only add if provider has available models
+                            available_models[p_name] = models
+                            logger.debug(f"Provider {p_name} has {len(models)} models available")
+                elif provider:
+                    # Provider doesn't have validation method, assume it's available
                     models = await provider.get_available_models()
-                    if models:  # Only add if provider has available models
+                    if models:
                         available_models[p_name] = models
-                        logger.debug(f"Provider {p_name} has {len(models)} models available")
+                        logger.debug(f"Provider {p_name} has {len(models)} models available (no validation)")
             except Exception as e:
                 logger.warning(f"Error getting models from provider {p_name}: {e}")
         
         if not available_models:
             logger.warning("No providers with available models found. Using default provider only.")
             # Add default provider's models
-            if await default_provider.has_valid_api_key():
+            if hasattr(default_provider, 'has_valid_api_key'):
+                if await default_provider.has_valid_api_key():
+                    models = await default_provider.get_available_models()
+                    if models:
+                        available_models[self.default_provider] = models
+            else:
                 models = await default_provider.get_available_models()
                 if models:
                     available_models[self.default_provider] = models
@@ -149,11 +167,10 @@ class ManusPrime:
                 return cached_result
             
             # Create execution plan using default provider
-            plan = await self.ai_planner.create_execution_plan(
+            plan = await self._create_execution_plan_with_fallback(
                 task=task,
                 provider=default_provider,
-                available_models=available_models,
-                cache=self.cache
+                available_models=available_models
             )
             
             # Execute task with plan
@@ -178,6 +195,15 @@ class ManusPrime:
             
             return result
             
+        except (ProviderError, RateLimitError, ServiceUnavailableError) as e:
+            logger.error(f"Provider error executing task: {e}")
+            return {
+                "success": False,
+                "error": f"Provider error: {str(e)}",
+                "execution_time": 0.0,
+                "tokens": 0,
+                "cost": 0.0
+            }
         except Exception as e:
             logger.error(f"Error executing task: {e}")
             logger.error("Traceback:", exc_info=True)
@@ -188,6 +214,54 @@ class ManusPrime:
                 "tokens": 0,
                 "cost": 0.0
             }
+
+    async def _create_execution_plan_with_fallback(self, 
+                                                  task: str, 
+                                                  provider: Any, 
+                                                  available_models: Dict[str, List[str]]) -> Dict[str, Any]:
+        """Create execution plan with fallback to simple execution."""
+        try:
+            # Try to create AI-driven execution plan
+            plan = await self.ai_planner.create_execution_plan(
+                task=task,
+                provider=provider,
+                available_models=available_models,
+                cache=self.cache
+            )
+            return plan
+            
+        except (AIPlannerException, ProviderError, RateLimitError, ServiceUnavailableError) as e:
+            logger.warning(f"AI planner failed, using fallback plan: {e}")
+            return self._create_fallback_plan(task, provider)
+        except Exception as e:
+            logger.error(f"Unexpected error in AI planner, using fallback plan: {e}")
+            return self._create_fallback_plan(task, provider)
+
+    def _create_fallback_plan(self, task: str, provider: Any) -> Dict[str, Any]:
+        """Create a simple fallback execution plan."""
+        return {
+            "analysis": {
+                "task_type": "default"
+            },
+            "execution_plan": {
+                "parallel_execution": False,
+                "steps": [
+                    {
+                        "id": "step-1",
+                        "description": task,
+                        "model": f"{provider.__class__.__name__}/{provider.get_default_model()}",
+                        "plugins": [],
+                        "dependencies": [],
+                        "expected_output": "completion"
+                    }
+                ]
+            },
+            "performance_estimates": {
+                "expected_duration": "short",
+                "resource_intensity": "low",
+                "parallelization_potential": False
+            }
+        }
 
     async def cleanup(self):
         """Clean up resources used by the agent."""
@@ -202,11 +276,11 @@ class ManusPrime:
 # Helper function for quick task execution
 async def execute_task(task: str, **kwargs) -> Dict:
     """Helper function to execute a task with ManusPrime."""
+    agent = None
     try:
         agent = ManusPrime()
         await agent.initialize()
         result = await agent.execute_task(task, **kwargs)
-        await agent.cleanup()
         return result
     except Exception as e:
         logger.error(f"Error in execute_task helper: {e}")
@@ -216,3 +290,7 @@ async def execute_task(task: str, **kwargs) -> Dict:
             "error": str(e),
             "execution_time": 0.0
         }
+    finally:
+        if agent:
+            await agent.cleanup()
+            logger.info("Agent cleaned up after task execution")
